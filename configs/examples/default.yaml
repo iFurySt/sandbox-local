@@ -1,0 +1,24 @@
+version: 1
+profiles:
+  default:
+    filesystem:
+      read:
+        deny:
+          - "~/.ssh"
+          - "~/.aws"
+        allow:
+          - "."
+      write:
+        allow:
+          - "."
+          - "${TMPDIR}"
+        deny:
+          - ".git"
+          - ".codex"
+          - ".agents"
+    network:
+      mode: offline
+      allow: []
+      deny: []
+    process:
+      timeout: 30s

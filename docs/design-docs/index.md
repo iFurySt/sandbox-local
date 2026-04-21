@@ -8,6 +8,7 @@
 - 每份文档写清当前状态和简短摘要。
 - 关联引入它的 execution plan 或 spec。
 
-## 初始文档
+## 当前文档
 
 - `core-beliefs.md`
+- `go-sandbox-runtime-architecture.md`：Go + Cobra 跨平台 sandbox runtime 的目录、SDK、CLI 和 OS 后端架构。

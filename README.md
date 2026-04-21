@@ -1,6 +1,6 @@
-# harness-template-cn
+# sandbox-local
 
-English version: [`harness-template`](https://github.com/iFurySt/harness-template)
+English version: [`sandbox-local`](https://github.com/iFurySt/sandbox-local)
 
 ## 简介
 
@@ -12,7 +12,7 @@ English version: [`harness-template`](https://github.com/iFurySt/harness-templat
 
 ## 许可证
 
-[MIT](LICENSE)
+[Apache-2.0](LICENSE)
 
 ## 备注
 

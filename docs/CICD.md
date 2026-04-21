@@ -19,18 +19,23 @@
 ## 推荐接入顺序
 
 1. 保留 `ci.yml`，作为唯一默认常驻的仓库基础门禁。
-2. 在 `scripts/ci.sh` 里继续叠加项目自己的验证命令。
+2. 在 `scripts/ci.sh` 里继续叠加项目自己的验证命令；当前 Go 项目会在存在 `go.mod` 时运行 `go test ./...`。
 3. 用真实构建产物替换 `scripts/release-package.sh`。
 4. 技术栈和环境稳定后，再补具体的部署 job。
 5. 即使交付方式变化，SBOM 和 provenance 这类供应链能力也建议保留。
 
 ## 默认 release 产物
 
-当前 release 流水线会产出：
+当前 release 流水线会产出真实 CLI 二进制归档：
 
 - `release-manifest.json`
-- `repo-metadata.tgz`
+- `sandbox-local_<version>_darwin_arm64.tar.gz`
+- `sandbox-local_<version>_darwin_amd64.tar.gz`
+- `sandbox-local_<version>_linux_arm64.tar.gz`
+- `sandbox-local_<version>_linux_amd64.tar.gz`
+- `sandbox-local_<version>_windows_arm64.tar.gz`
+- `sandbox-local_<version>_windows_amd64.tar.gz`
 - `sbom.spdx.json`
 - 对 release artifact 生成的 GitHub artifact attestation
 
-也就是说，即使项目还没进入真实部署阶段，这个模板也已经把“可追溯的制品封装”这一步准备好了。
+每个归档包含 `sandbox-local` 可执行文件、`LICENSE`、`README.md` 和默认 policy 示例。

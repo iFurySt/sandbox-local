@@ -14,7 +14,7 @@
 | 区域 | 评分 | 原因 | 下一步 |
 | --- | --- | --- | --- |
 | 产品面 | D | 还没有真实产品定义。 | 先明确第一个用户路径和验收标准。 |
-| 架构文档 | C | 有基础骨架，但还没替换成项目真实信息。 | 补齐 `docs/ARCHITECTURE.md`。 |
-| 测试 | D | 还没有接入项目自己的测试。 | 先补一条最小 smoke path。 |
+| 架构文档 | B | 已替换为 Go sandbox runtime 的真实顶层架构，并补充设计文档、active plan 和三端后端状态。 | 后续随 SDK API 稳定、Windows allowlist 和 CI 矩阵继续同步。 |
+| 测试 | C | 已接入 Go 单元测试、CLI smoke、macOS/Linux allowlist 与文件隔离验证；Windows local-user/ACL/firewall 已实现但在 UTM Windows arm64 上遇到备用凭据启动 `0xC0000142` 阻塞，三端 E2E 还主要是手工命令。 | 先解决 Windows 稳定进程启动路径，再把三端 E2E 固化进 CI 矩阵，并补 symlink/junction、IP canonicalization、cleanup 异常路径测试。 |
 | 可观测性 | D | 还没有日志、指标、链路的约定。 | 明确本地和 CI 怎么访问观测数据。 |
 | 安全 | C | 默认约束已经有了，但具体实现还没落地。 | 根据项目接入真实认证、密钥和依赖治理。 |
