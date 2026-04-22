@@ -1,64 +1,66 @@
 # sandbox-local
 
-跨平台本地 sandbox runtime，面向 Agent 和上层客户端应用。
+English | [简体中文](README.zh-CN.md)
 
-它提供两种入口，但走同一套策略和后端：
+Cross-platform local sandbox runtime for agents and upper-level client applications.
 
-- Go SDK：`pkg/sandbox`
-- CLI：`sandbox-local`
+It exposes the same policy and backend path through two entry points:
 
-默认不把 Docker 当作 sandbox 后端，而是封装各主流 OS 的原生隔离能力。
+- Go SDK: `pkg/sandbox`
+- CLI: `sandbox-local`
 
-## 三端能力
+By default, `sandbox-local` wraps OS-native isolation instead of using Docker as the sandbox backend.
 
-| 平台 | 后端 | 当前覆盖 |
+## Platform Coverage
+
+| Platform | Backend | Current coverage |
 | --- | --- | --- |
-| macOS | Seatbelt / `sandbox-exec` | 文件读写策略，`offline` / `allowlist` / `open` 网络 |
-| Linux | bubblewrap、namespaces、seccomp bridge | 文件策略、network namespace、allowlist proxy、直连 socket 绕过阻断 |
-| Windows | disabled local user、ACL、Scheduled Task runner、Firewall | 文件 ACL 策略、`setup windows`、`offline` / `allowlist` / `open` 网络、cleanup |
+| macOS | Seatbelt / `sandbox-exec` | filesystem read/write policy, `offline` / `allowlist` / `open` networking |
+| Linux | bubblewrap, namespaces, seccomp bridge | filesystem policy, network namespace, allowlist proxy, direct socket bypass blocking |
+| Windows | disabled local user, ACL, Scheduled Task runner, Firewall | filesystem ACL policy, `setup windows`, `offline` / `allowlist` / `open` networking, cleanup |
 
-## 快速开始
+## Quick Start
 
-构建 CLI：
+Build the CLI:
 
 ```bash
 go build -o ./bin/sandbox-local ./cmd/sandbox-local
 ```
 
-查看当前后端能力：
+Check backend capability:
 
 ```bash
 ./bin/sandbox-local doctor --json
 ```
 
-用默认策略跑一个命令：
+Run a command with the default policy:
 
 ```bash
 ./bin/sandbox-local run -- /bin/echo hello
 ```
 
-默认策略：
+Default policy:
 
-- 网络是 `offline`
-- 当前目录可读写
-- `.git`、`.codex`、`.agents` 禁止写入
-- `~/.ssh`、`~/.aws` 等常见敏感目录禁止读取
+- network mode is `offline`
+- the current directory is readable and writable
+- `.git`, `.codex`, and `.agents` are write-denied
+- common sensitive locations such as `~/.ssh` and `~/.aws` are read-denied
 
-## CLI 示例
+## CLI Examples
 
-允许命令写入当前目录：
+Allow a command to write into the current directory:
 
 ```bash
 ./bin/sandbox-local run -- /bin/sh -c 'printf ok > allowed.txt'
 ```
 
-阻止写入 `.git`：
+Block writes to `.git`:
 
 ```bash
 ./bin/sandbox-local run -- /bin/sh -c 'printf bad > .git/blocked.txt'
 ```
 
-只允许访问 `example.com`：
+Allow only `example.com`:
 
 ```bash
 ./bin/sandbox-local run \
@@ -67,7 +69,7 @@ go build -o ./bin/sandbox-local ./cmd/sandbox-local
   -- curl --fail -I --max-time 8 https://example.com
 ```
 
-Windows 先准备宿主机能力：
+Prepare Windows host requirements:
 
 ```powershell
 .\bin\sandbox-local.exe setup windows
@@ -76,7 +78,7 @@ Windows 先准备宿主机能力：
 
 ## Go SDK
 
-最小调用形态：
+Minimal usage:
 
 ```go
 manager, err := sandbox.NewManager(sandbox.Options{
@@ -115,64 +117,64 @@ if err != nil {
 _ = result.ExitCode
 ```
 
-SDK 上层应用应设置 `Options.HelperPath` 或 `SANDBOX_LOCAL_HELPER`，指向 `sandbox-local` helper binary。这样 Linux bridge / Windows runner 不会把上层业务进程误当作内部 helper 重新执行。
+SDK callers should set `Options.HelperPath` or `SANDBOX_LOCAL_HELPER` to the `sandbox-local` helper binary. This prevents the Linux bridge or Windows runner from re-executing the upper application binary as an internal helper.
 
-## 安全场景
+## Security Scenarios
 
-实际能覆盖的安全 case 见：
+Concrete safety cases are documented in:
 
 - `docs/SANDBOX_SECURITY_SCENARIOS.md`
 
-里面按 macOS、Linux、Windows 分节记录：
+It contains macOS, Linux, and Windows sections for:
 
-- 后端能力报告
-- 工作目录允许写
-- `.git` 写保护
-- 敏感文件 read deny
-- 默认 offline 网络
-- allowlist 允许/拒绝域名
-- `curl --noproxy '*'` 直连绕过阻断
-- Linux AF_UNIX/socket 绕过回归
-- Windows scheduled task、firewall rule、`sandboxlocal` cleanup
+- backend capability reporting
+- allowed workspace writes
+- `.git` write protection
+- sensitive file read deny
+- default offline networking
+- allowlist allow/deny domains
+- `curl --noproxy '*'` direct bypass blocking
+- Linux AF_UNIX/socket bypass regression
+- Windows scheduled task, firewall rule, and `sandboxlocal` cleanup
 
-## 测试
+## Testing
 
-单元测试：
+Unit tests:
 
 ```bash
 go test ./...
 ```
 
-仓库级检查：
+Repository-level checks:
 
 ```bash
 make ci
 ```
 
-SDK integration E2E：
+SDK integration E2E:
 
 ```bash
 go test -tags integration ./tests/e2e
 ```
 
-或：
+or:
 
 ```bash
 ./scripts/e2e-sdk.sh
 ```
 
-Windows：
+Windows:
 
 ```powershell
 .\scripts\e2e-sdk.ps1
 ```
 
-## 文档
+## Docs
 
-- `docs/ARCHITECTURE.md`：顶层架构和平台边界
-- `docs/design-docs/go-sandbox-runtime-architecture.md`：详细设计
-- `docs/SANDBOX_SECURITY_SCENARIOS.md`：具体安全场景
-- `docs/exec-plans/active/go-sandbox-runtime.md`：实现进度和后续增强
+- `docs/ARCHITECTURE.md`: top-level architecture and platform boundaries
+- `docs/design-docs/go-sandbox-runtime-architecture.md`: detailed design
+- `docs/SANDBOX_SECURITY_SCENARIOS.md`: concrete security scenarios
+- `docs/exec-plans/active/go-sandbox-runtime.md`: implementation progress and follow-up work
 
 ## License
 

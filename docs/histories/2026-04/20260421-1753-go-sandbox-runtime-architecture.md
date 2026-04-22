@@ -62,6 +62,11 @@
 - 重写 `README.md`，移除模板仓库说明和无关备注，改为面向当前 sandbox runtime 的快速说明。
 - README 保留项目定位、三端 backend 覆盖、CLI 快速开始、Windows setup、Go SDK 示例、安全场景入口、测试命令和关键设计文档链接。
 
+## 2026-04-22 五次补充
+
+- 将中文 README 移动到 `README.zh-CN.md`，新增英文版 `README.md`。
+- 中英文 README 均加入语言切换入口，并保持三端能力、CLI/SDK 示例、安全场景、测试和文档链接一致。
+
 ## 受影响文件
 
 - `docs/ARCHITECTURE.md`
