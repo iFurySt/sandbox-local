@@ -57,6 +57,11 @@
 - 新增 `docs/SANDBOX_SECURITY_SCENARIOS.md`，把 macOS、Linux、Windows 当前实际覆盖的安全场景拆成 step-by-step case，包含准备命令、执行命令、通过标准和可演化为 E2E 的断言。
 - 更新 `docs/SECURITY.md` 和 `docs/QUALITY_SCORE.md`，给安全场景手册增加入口，并把它记录为后续 case-driven E2E 的输入。
 
+## 2026-04-22 四次补充
+
+- 重写 `README.md`，移除模板仓库说明和无关备注，改为面向当前 sandbox runtime 的快速说明。
+- README 保留项目定位、三端 backend 覆盖、CLI 快速开始、Windows setup、Go SDK 示例、安全场景入口、测试命令和关键设计文档链接。
+
 ## 受影响文件
 
 - `docs/ARCHITECTURE.md`
