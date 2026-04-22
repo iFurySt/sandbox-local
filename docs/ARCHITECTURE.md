@@ -56,7 +56,7 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 ## 平台边界
 
 - macOS：固定调用 `/usr/bin/sandbox-exec`，动态生成 Seatbelt profile。
-- Linux：优先 bubblewrap / namespaces，后续补 seccomp 和 managed proxy bridge。
+- Linux：使用 bubblewrap / namespaces 表达 filesystem 与 network 隔离；`allowlist` 通过 sandbox 内 loopback bridge、host-managed proxy 和 seccomp exec wrapper 阻断直接 socket 绕过。
 - Windows：当前使用持久但默认禁用的本地用户 `sandboxlocal` 作为 sandbox identity；`sandbox-local setup windows` 可预创建/检查账户、batch logon right、Task Scheduler、Firewall 和 OpenSSH 状态。每次运行前重置随机密码并启用账户，运行后禁用账户。文件策略通过 ACL/DACL 表达，进程启动通过一次性 Windows Scheduled Task runner 规避 UTM/SSH service 场景下 `CreateProcessWithTokenW` 的 `0xC0000142` 兼容性问题，`offline` 与 `allowlist` 网络通过 Windows Firewall per-user 规则阻断直连，allowlist 流量走 host-managed HTTP/HTTPS proxy。
 
 任何平台无法强制执行的策略，都必须通过 capability report 或运行错误显式暴露，不能静默当作成功。

@@ -48,8 +48,8 @@
 
 1. 初始化 Go module、Cobra CLI、SDK facade、policy model、noop backend、CLI smoke test。
 2. 实现 macOS Seatbelt 后端，覆盖 filesystem、offline network、allowlist proxy。
-3. 实现 Linux bubblewrap 后端，先覆盖 filesystem 和 offline network，再补 managed proxy 与 seccomp。
-4. 实现 Windows local-user 后端，覆盖 ACL、firewall、scheduled task runner，再评估显式 setup helper。
+3. 实现 Linux bubblewrap 后端，覆盖 filesystem、offline/open network、managed proxy bridge 与 seccomp 绕过阻断。
+4. 实现 Windows local-user 后端，覆盖 ACL、firewall、scheduled task runner、显式 setup 和 allowlist proxy。
 5. 补齐三平台 CI、release artifact、SBOM、provenance 和 E2E。
 
 ## 验证方式
@@ -100,9 +100,9 @@
   - `ssh Leo@192.168.64.3 'cd /d C:\Users\Leo\sandbox-local-agent && bin\sandbox-local.exe run --network open -- curl.exe -I --max-time 8 https://example.com'`，确认 open 网络可用。
   - `ssh Leo@192.168.64.3 'cd /d C:\Users\Leo\sandbox-local-agent && bin\sandbox-local.exe run -- curl.exe -I --max-time 8 https://example.com'`，确认默认 offline 被 per-user firewall 阻断。
   - `ssh Leo@192.168.64.3 'net user | findstr /I sbx'` 与 `Get-NetFirewallRule -DisplayName 'sandbox-local-*'`，确认临时用户和防火墙规则清理干净。
-  - 后续补丁新增临时用户 profile 目录清理、机器级 mutex `ERROR_ALREADY_EXISTS` 处理、请求 env JSON 转发，并把 runner 从手写环境块调整为 `LogonUserW` + `CreateEnvironmentBlock` + `CreateProcessWithTokenW`。
+  - 当日后续补丁新增临时用户 profile 目录清理、机器级 mutex `ERROR_ALREADY_EXISTS` 处理、请求 env JSON 转发，并把 runner 从手写环境块调整为 `LogonUserW` + `CreateEnvironmentBlock` + `CreateProcessWithTokenW`。
   - UTM Windows SSH 恢复后复验：`go test ./...`、Windows build、`doctor` 均通过；cleanup 检查显示无残留 `sbx*` 用户/profile 与 `sandbox-local-*` firewall rule。
-  - 阻塞：最终复验中 `cmd.exe`、`whoami.exe`、`where.exe`、`powershell.exe` 在备用凭据路径下反复返回 `0xC0000142`。已排除/验证路径包括 `CreateProcessWithTokenW`、`LOGON_WITH_PROFILE`/profileless、Job Object on/off、PowerShell `Start-Process -Credential` 对照、batch logon token、OpenSSH 临时用户尝试；该问题当前限定在 Windows 进程启动兼容性，不能标记 Windows E2E 完备。
+  - 当日最终复验中 `cmd.exe`、`whoami.exe`、`where.exe`、`powershell.exe` 在备用凭据路径下反复返回 `0xC0000142`。已排除/验证路径包括 `CreateProcessWithTokenW`、`LOGON_WITH_PROFILE`/profileless、Job Object on/off、PowerShell `Start-Process -Credential` 对照、batch logon token、OpenSSH 临时用户尝试；该问题已在 2026-04-22 通过一次性 Scheduled Task runner 解决，见下一条验证记录。
 - 2026-04-22 Windows：
   - SSH 恢复后确认远端 `WIN-VT2FGSOBO07\Leo`、Windows `10.0.26100.8246`、OpenSSH Server running、管理员令牌可用。
   - 复现真实 Windows 后端 `cmd.exe` 仍返回 `0xC0000142`；对照验证 PowerShell `Start-Process -Credential` 同样返回 `-1073741502`。
