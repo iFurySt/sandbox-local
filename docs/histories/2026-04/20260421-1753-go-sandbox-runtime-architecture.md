@@ -67,6 +67,12 @@
 - 将中文 README 移动到 `README.zh-CN.md`，新增英文版 `README.md`。
 - 中英文 README 均加入语言切换入口，并保持三端能力、CLI/SDK 示例、安全场景、测试和文档链接一致。
 
+## 2026-04-22 六次补充
+
+- 修复 GitHub Actions `CI` 中 Markdown lint 失败：README Go 示例代码块改用空格缩进，避免 MD010 hard tabs。
+- 将 `docs/SANDBOX_SECURITY_SCENARIOS.md` 中重复的 `准备` 小节改为平台专属标题，避免 MD024 duplicate heading。
+- 本地用 `markdownlint-cli2@0.22.0 "**/*.md"` 复验，结果为 0 errors。
+
 ## 受影响文件
 
 - `docs/ARCHITECTURE.md`
@@ -76,6 +82,7 @@
 - `docs/QUALITY_SCORE.md`
 - `LICENSE`
 - `README.md`
+- `README.zh-CN.md`
 - `go.mod`
 - `go.sum`
 - `cmd/sandbox-local/`

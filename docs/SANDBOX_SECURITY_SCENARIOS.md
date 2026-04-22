@@ -34,7 +34,7 @@ cleanup_assertion
 
 macOS 后端使用 `/usr/bin/sandbox-exec` 和动态生成的 Seatbelt profile。当前覆盖文件读写隔离、默认 offline 网络、allowlist 网络和直连绕过阻断。
 
-### 准备
+### macOS 准备
 
 ```bash
 go build -o ./bin/sandbox-local ./cmd/sandbox-local
@@ -200,7 +200,7 @@ E2E 断言：验证的是直连绕过失败，不是域名拒绝。
 
 Linux 后端使用 bubblewrap / namespaces。`allowlist` 使用 sandbox 内 loopback bridge、host Unix socket proxy 和 seccomp exec wrapper，目标是既能代理允许的域名，又阻断直接 socket 绕过。
 
-### 准备
+### Linux 准备
 
 ```bash
 go build -o ./bin/sandbox-local ./cmd/sandbox-local
@@ -388,7 +388,7 @@ E2E 断言：这是 Linux 特有的 seccomp/bridge 绕过回归。
 
 Windows 后端使用持久但默认禁用的本地用户 `sandboxlocal`、文件 ACL/DACL、一次性 Scheduled Task runner 和 per-user Firewall。`allowlist` 通过 host-managed HTTP/HTTPS proxy 执行域名允许/拒绝，并用 per-user outbound firewall 阻断直连绕过。loopback 当前保留给 managed proxy。
 
-### 准备
+### Windows 准备
 
 在管理员 PowerShell 中执行：
 

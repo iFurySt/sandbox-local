@@ -82,37 +82,37 @@ Windows 先准备宿主机能力：
 
 ```go
 manager, err := sandbox.NewManager(sandbox.Options{
-	HelperPath: "./bin/sandbox-local",
+    HelperPath: "./bin/sandbox-local",
 })
 if err != nil {
-	return err
+    return err
 }
 defer manager.Close()
 
 if _, err := manager.Setup(ctx, sandbox.SetupRequest{TargetPlatform: runtime.GOOS}); err != nil {
-	return err
+    return err
 }
 
 result, err := manager.Run(ctx, sandbox.Request{
-	Command: []string{"/bin/sh", "-c", "printf ok > allowed.txt"},
-	Cwd:     workdir,
-	Policy: sandbox.Policy{
-		Filesystem: sandbox.FilesystemPolicy{
-			ReadAllow:  []string{workdir},
-			ReadDeny:   []string{filepath.Join(workdir, "secret.txt")},
-			WriteAllow: []string{workdir},
-			WriteDeny:  []string{filepath.Join(workdir, ".git")},
-		},
-		Network: sandbox.NetworkPolicy{
-			Mode: sandbox.NetworkOffline,
-		},
-		Process: sandbox.ProcessPolicy{
-			Timeout: 20 * time.Second,
-		},
-	},
+    Command: []string{"/bin/sh", "-c", "printf ok > allowed.txt"},
+    Cwd:     workdir,
+    Policy: sandbox.Policy{
+        Filesystem: sandbox.FilesystemPolicy{
+            ReadAllow:  []string{workdir},
+            ReadDeny:   []string{filepath.Join(workdir, "secret.txt")},
+            WriteAllow: []string{workdir},
+            WriteDeny:  []string{filepath.Join(workdir, ".git")},
+        },
+        Network: sandbox.NetworkPolicy{
+            Mode: sandbox.NetworkOffline,
+        },
+        Process: sandbox.ProcessPolicy{
+            Timeout: 20 * time.Second,
+        },
+    },
 })
 if err != nil {
-	return err
+    return err
 }
 _ = result.ExitCode
 ```
