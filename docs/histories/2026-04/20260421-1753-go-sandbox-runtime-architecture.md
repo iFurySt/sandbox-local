@@ -52,6 +52,11 @@
 - 新增 `tests/e2e/sdk_enforcement_test.go` 与 `scripts/e2e-sdk.sh` / `scripts/e2e-sdk.ps1`。集成测试模拟上层 SDK 调用链路，构建 helper binary 后验证 cwd 写 allow、`.git` 写 deny、secret read deny、offline、allowlist 允许/拒绝和直接绕过阻断。
 - 三端验证完成：macOS `make ci` 与 SDK E2E 通过；Linux OrbStack `go test ./...` 与 SDK E2E 通过；Windows SSH 远端 `go test ./...`、build、`setup windows`、SDK E2E、CLI allowlist 手工校验和 cleanup 检查均通过。Windows 旧 `sbx*` profile 已在重启后清理，`sandboxlocal` 保持 disabled。
 
+## 2026-04-22 三次补充
+
+- 新增 `docs/SANDBOX_SECURITY_SCENARIOS.md`，把 macOS、Linux、Windows 当前实际覆盖的安全场景拆成 step-by-step case，包含准备命令、执行命令、通过标准和可演化为 E2E 的断言。
+- 更新 `docs/SECURITY.md` 和 `docs/QUALITY_SCORE.md`，给安全场景手册增加入口，并把它记录为后续 case-driven E2E 的输入。
+
 ## 受影响文件
 
 - `docs/ARCHITECTURE.md`

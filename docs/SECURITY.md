@@ -11,3 +11,5 @@
 - 对外 API、Webhook、文件上传和沙箱执行的规则。
 
 仓库级的依赖、SBOM 和 provenance 默认能力，统一写在 `docs/SUPPLY_CHAIN_SECURITY.md`。
+
+本地 sandbox runtime 已覆盖的安全场景、三端手工复验步骤和可演化为 E2E 的断言，见 `docs/SANDBOX_SECURITY_SCENARIOS.md`。
