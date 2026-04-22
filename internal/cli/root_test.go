@@ -41,3 +41,15 @@ func TestPolicyInitStdout(t *testing.T) {
 		t.Fatalf("unexpected policy output: %q", out.String())
 	}
 }
+
+func TestNoopSetup(t *testing.T) {
+	var out bytes.Buffer
+	cmd := NewRootCommand(&out, &bytes.Buffer{})
+	cmd.SetArgs([]string{"--backend", "noop", "setup"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "backend: noop") || !strings.Contains(out.String(), "ready: true") {
+		t.Fatalf("unexpected setup output: %q", out.String())
+	}
+}

@@ -35,6 +35,7 @@ type Options struct {
 	BackendPreference BackendPreference
 	Enforcement       EnforcementMode
 	EventSink         EventSink
+	HelperPath        string
 }
 
 type Request struct {
@@ -43,6 +44,10 @@ type Request struct {
 	Env     map[string]string
 	Policy  Policy
 	Stdio   Stdio
+}
+
+type SetupRequest struct {
+	TargetPlatform string
 }
 
 type Policy struct {
@@ -91,6 +96,7 @@ type Result struct {
 
 type Plan = model.Plan
 type CapabilityReport = model.CapabilityReport
+type SetupReport = model.SetupReport
 
 type Manager struct {
 	inner *engine.Manager
@@ -124,6 +130,14 @@ func (m *Manager) Check(ctx context.Context) (*CapabilityReport, error) {
 	return &report, nil
 }
 
+func (m *Manager) Setup(ctx context.Context, req SetupRequest) (*SetupReport, error) {
+	report, err := m.inner.Setup(ctx, model.SetupRequest{TargetPlatform: req.TargetPlatform})
+	if err != nil {
+		return &report, err
+	}
+	return &report, nil
+}
+
 func (m *Manager) Close() error {
 	return m.inner.Close()
 }
@@ -133,6 +147,7 @@ func toModelOptions(opts Options) model.Options {
 		BackendPreference: model.BackendPreference(opts.BackendPreference),
 		Enforcement:       model.EnforcementMode(opts.Enforcement),
 		EventSink:         eventSinkAdapter{sink: opts.EventSink},
+		HelperPath:        opts.HelperPath,
 	}
 }
 

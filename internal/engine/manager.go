@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 
 	"github.com/iFurySt/sandbox-local/internal/backend"
@@ -35,11 +36,48 @@ func (m *Manager) Check(ctx context.Context) (model.CapabilityReport, error) {
 	return report, nil
 }
 
+func (m *Manager) Setup(ctx context.Context, req model.SetupRequest) (model.SetupReport, error) {
+	target := req.TargetPlatform
+	if target == "" || target == "current" {
+		target = runtime.GOOS
+	}
+	if target != runtime.GOOS {
+		return model.SetupReport{
+			Platform: target,
+			Ready:    false,
+			Missing:  []string{"target platform is not the current host"},
+		}, fmt.Errorf("setup target %q must be run on %s", target, target)
+	}
+	selected, report, err := backend.Select(ctx, m.opts.BackendPreference, m.opts.Enforcement)
+	if err != nil {
+		return model.SetupReport{
+			Backend:  report.Backend,
+			Platform: report.Platform,
+			Ready:    false,
+			Missing:  report.Missing,
+			Warnings: report.Warnings,
+			Notes:    report.Notes,
+		}, err
+	}
+	if setupBackend, ok := selected.(backend.SetupBackend); ok {
+		return setupBackend.Setup(ctx)
+	}
+	return model.SetupReport{
+		Backend:  report.Backend,
+		Platform: report.Platform,
+		Ready:    report.Available,
+		Warnings: report.Warnings,
+		Notes:    append([]string{"backend does not require explicit setup"}, report.Notes...),
+		Missing:  report.Missing,
+	}, nil
+}
+
 func (m *Manager) Prepare(ctx context.Context, req model.Request) (model.Plan, error) {
 	req, err := normalizeRequest(req)
 	if err != nil {
 		return model.Plan{}, err
 	}
+	m.applyManagerOptions(&req)
 	selected, report, err := backend.Select(ctx, m.opts.BackendPreference, m.opts.Enforcement)
 	if err != nil {
 		return model.Plan{
@@ -101,6 +139,7 @@ func (m *Manager) Run(ctx context.Context, req model.Request) (model.Result, err
 	if err != nil {
 		return model.Result{}, err
 	}
+	m.applyManagerOptions(&req)
 	runCtx := ctx
 	cancel := func() {}
 	if req.Policy.Process.Timeout > 0 {
@@ -220,6 +259,12 @@ func normalizeRequest(req model.Request) (model.Request, error) {
 		req.Policy.Network.Mode = model.NetworkOffline
 	}
 	return req, nil
+}
+
+func (m *Manager) applyManagerOptions(req *model.Request) {
+	if req.HelperPath == "" {
+		req.HelperPath = m.opts.HelperPath
+	}
 }
 
 func mergeEnv(base []string, overlay map[string]string) []string {

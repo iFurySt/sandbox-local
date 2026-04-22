@@ -18,7 +18,11 @@ func Abs(path string, cwd string) (string, error) {
 		}
 		expanded = filepath.Join(cwd, expanded)
 	}
-	return filepath.Abs(expanded)
+	abs, err := filepath.Abs(expanded)
+	if err != nil {
+		return "", err
+	}
+	return canonicalExistingPrefix(abs)
 }
 
 func AbsList(paths []string, cwd string) ([]string, error) {
@@ -47,6 +51,28 @@ func Expand(path string) string {
 		}
 	}
 	return os.ExpandEnv(path)
+}
+
+func canonicalExistingPrefix(path string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved, nil
+	}
+	var missing []string
+	current := filepath.Clean(path)
+	for {
+		parent := filepath.Dir(current)
+		if parent == current {
+			return filepath.Clean(path), nil
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+	}
 }
 
 func Dedup(paths []string) []string {

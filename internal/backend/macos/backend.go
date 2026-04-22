@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/iFurySt/sandbox-local/internal/fsx"
@@ -55,7 +54,7 @@ func (b Backend) Prepare(_ context.Context, req model.Request) (model.PreparedCo
 			return model.PreparedCommand{}, nil, err
 		}
 	}
-	absCwd, err := filepath.Abs(cwd)
+	absCwd, err := fsx.Abs(cwd, "")
 	if err != nil {
 		return model.PreparedCommand{}, nil, err
 	}
@@ -87,37 +86,15 @@ func buildProfile(policy model.Policy, cwd string, managedProxyPort int) (string
 	if err != nil {
 		return "", err
 	}
-	readAllow, err := fsx.AbsList(policy.Filesystem.ReadAllow, cwd)
-	if err != nil {
-		return "", err
-	}
-
 	var sb strings.Builder
 	sb.WriteString("(version 1)\n")
 	sb.WriteString("(deny default)\n")
 	sb.WriteString("(allow process*)\n")
 	sb.WriteString("(allow sysctl-read)\n")
-	sb.WriteString("(allow file-read*)\n")
+	writeReadAllowRule(&sb, readDeny)
 	sb.WriteString("(allow file-write-data (literal \"/dev/null\"))\n")
 	for _, path := range writeAllow {
-		sb.WriteString("(allow file-write* (subpath ")
-		sb.WriteString(sbplString(path))
-		sb.WriteString("))\n")
-	}
-	for _, path := range writeDeny {
-		sb.WriteString("(deny file-write* (subpath ")
-		sb.WriteString(sbplString(path))
-		sb.WriteString("))\n")
-	}
-	for _, path := range readDeny {
-		sb.WriteString("(deny file-read* (subpath ")
-		sb.WriteString(sbplString(path))
-		sb.WriteString("))\n")
-	}
-	for _, path := range readAllow {
-		sb.WriteString("(allow file-read* (subpath ")
-		sb.WriteString(sbplString(path))
-		sb.WriteString("))\n")
+		writePathAllowRule(&sb, "file-write*", path, writeDeny)
 	}
 	switch policy.Network.Mode {
 	case "", model.NetworkOffline:
@@ -132,6 +109,44 @@ func buildProfile(policy model.Policy, cwd string, managedProxyPort int) (string
 		return "", fmt.Errorf("unsupported network mode %q", policy.Network.Mode)
 	}
 	return sb.String(), nil
+}
+
+func writeReadAllowRule(sb *strings.Builder, readDeny []string) {
+	sb.WriteString("(allow file-read*")
+	if len(readDeny) > 0 {
+		sb.WriteString(" (require-all")
+		writePathExclusions(sb, readDeny)
+		sb.WriteString(")")
+	}
+	sb.WriteString(")\n")
+}
+
+func writePathAllowRule(sb *strings.Builder, operation string, path string, exclusions []string) {
+	writePathAllowMatcher(sb, operation, "literal", path, exclusions)
+	writePathAllowMatcher(sb, operation, "subpath", path, exclusions)
+}
+
+func writePathAllowMatcher(sb *strings.Builder, operation string, matcher string, path string, exclusions []string) {
+	sb.WriteString("(allow ")
+	sb.WriteString(operation)
+	sb.WriteString(" (require-all (")
+	sb.WriteString(matcher)
+	sb.WriteString(" ")
+	sb.WriteString(sbplString(path))
+	sb.WriteString(")")
+	writePathExclusions(sb, exclusions)
+	sb.WriteString("))\n")
+}
+
+func writePathExclusions(sb *strings.Builder, paths []string) {
+	for _, path := range paths {
+		sb.WriteString(" (require-not (literal ")
+		sb.WriteString(sbplString(path))
+		sb.WriteString("))")
+		sb.WriteString(" (require-not (subpath ")
+		sb.WriteString(sbplString(path))
+		sb.WriteString("))")
+	}
 }
 
 func networkProxyPolicy(port int) string {

@@ -32,16 +32,22 @@ type Options struct {
 	BackendPreference BackendPreference
 	Enforcement       EnforcementMode
 	EventSink         EventSink
+	HelperPath        string
 }
 
 type Request struct {
-	Command          []string
-	Cwd              string
-	Env              map[string]string
-	Policy           Policy
-	Stdio            Stdio
-	ManagedProxyPort int
+	Command            []string
+	Cwd                string
+	Env                map[string]string
+	Policy             Policy
+	Stdio              Stdio
+	ManagedProxyPort   int
 	ManagedProxySocket string
+	HelperPath         string
+}
+
+type SetupRequest struct {
+	TargetPlatform string
 }
 
 type Policy struct {
@@ -124,6 +130,17 @@ type CapabilityReport struct {
 	Missing      []string `json:"missing,omitempty"`
 	Warnings     []string `json:"warnings,omitempty"`
 	Notes        []string `json:"notes,omitempty"`
+}
+
+type SetupReport struct {
+	Backend  string   `json:"backend"`
+	Platform string   `json:"platform"`
+	Ready    bool     `json:"ready"`
+	Changed  bool     `json:"changed"`
+	Actions  []string `json:"actions,omitempty"`
+	Missing  []string `json:"missing,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+	Notes    []string `json:"notes,omitempty"`
 }
 
 type Cleanup func(context.Context) error

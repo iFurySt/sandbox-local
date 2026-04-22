@@ -60,6 +60,7 @@ func NewRootCommand(out io.Writer, errOut io.Writer) *cobra.Command {
 	cmd.PersistentFlags().StringVar(&opts.enforcement, "enforcement", "require", "enforcement mode: require or best-effort")
 	cmd.AddCommand(newRunCommand(opts))
 	cmd.AddCommand(newDoctorCommand(opts))
+	cmd.AddCommand(newSetupCommand(opts))
 	cmd.AddCommand(newDebugCommand(opts))
 	cmd.AddCommand(newPolicyCommand(opts))
 	cmd.AddCommand(newProxyBridgeCommand())
@@ -146,6 +147,49 @@ func newDoctorCommand(root *rootOptions) *cobra.Command {
 				fmt.Fprintf(root.out, "note: %s\n", note)
 			}
 			return nil
+		},
+	}
+}
+
+func newSetupCommand(root *rootOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "setup [platform]",
+		Short: "Prepare host prerequisites for the sandbox backend",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			target := "current"
+			if len(args) > 0 {
+				target = args[0]
+			}
+			manager, err := sandbox.NewManager(sandbox.Options{
+				BackendPreference: sandbox.BackendPreference(root.backend),
+				Enforcement:       sandbox.EnforcementMode(root.enforcement),
+			})
+			if err != nil {
+				return err
+			}
+			defer manager.Close()
+			report, err := manager.Setup(cmd.Context(), sandbox.SetupRequest{TargetPlatform: target})
+			if root.json {
+				if jsonErr := writeJSON(root.out, report); jsonErr != nil {
+					return jsonErr
+				}
+				return err
+			}
+			fmt.Fprintf(root.out, "backend: %s\nplatform: %s\nready: %t\nchanged: %t\n", report.Backend, report.Platform, report.Ready, report.Changed)
+			for _, action := range report.Actions {
+				fmt.Fprintf(root.out, "action: %s\n", action)
+			}
+			for _, missing := range report.Missing {
+				fmt.Fprintf(root.out, "missing: %s\n", missing)
+			}
+			for _, warning := range report.Warnings {
+				fmt.Fprintf(root.out, "warning: %s\n", warning)
+			}
+			for _, note := range report.Notes {
+				fmt.Fprintf(root.out, "note: %s\n", note)
+			}
+			return err
 		},
 	}
 }

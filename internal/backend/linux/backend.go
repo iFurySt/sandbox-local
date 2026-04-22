@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 
 	"github.com/iFurySt/sandbox-local/internal/fsx"
+	"github.com/iFurySt/sandbox-local/internal/helper"
 	"github.com/iFurySt/sandbox-local/internal/model"
 )
 
@@ -53,11 +53,11 @@ func (b Backend) Prepare(_ context.Context, req model.Request) (model.PreparedCo
 			return model.PreparedCommand{}, nil, err
 		}
 	}
-	absCwd, err := filepath.Abs(cwd)
+	absCwd, err := fsx.Abs(cwd, "")
 	if err != nil {
 		return model.PreparedCommand{}, nil, err
 	}
-	args, warnings, err := buildArgs(req.Policy, absCwd, req.Command, req.ManagedProxyPort, req.ManagedProxySocket)
+	args, warnings, err := buildArgs(req.Policy, absCwd, req.Command, req.ManagedProxyPort, req.ManagedProxySocket, req.HelperPath)
 	if err != nil {
 		return model.PreparedCommand{}, nil, err
 	}
@@ -71,7 +71,7 @@ func (b Backend) Prepare(_ context.Context, req model.Request) (model.PreparedCo
 	}, nil, nil
 }
 
-func buildArgs(policy model.Policy, cwd string, command []string, managedProxyPort int, managedProxySocket string) ([]string, []string, error) {
+func buildArgs(policy model.Policy, cwd string, command []string, managedProxyPort int, managedProxySocket string, helperPath string) ([]string, []string, error) {
 	writeAllow, err := fsx.AbsList(policy.Filesystem.WriteAllow, cwd)
 	if err != nil {
 		return nil, nil, err
@@ -125,12 +125,12 @@ func buildArgs(policy model.Policy, cwd string, command []string, managedProxyPo
 		if managedProxyPort <= 0 || managedProxySocket == "" {
 			return nil, nil, fmt.Errorf("network allowlist requires managed proxy metadata")
 		}
-		exe, err := os.Executable()
+		resolvedHelper, err := helper.Resolve(helperPath)
 		if err != nil {
 			return nil, nil, err
 		}
 		command = append([]string{
-			exe,
+			resolvedHelper,
 			"__proxy-bridge",
 			"--listen", fmt.Sprintf("127.0.0.1:%d", managedProxyPort),
 			"--unix", managedProxySocket,

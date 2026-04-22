@@ -10,7 +10,7 @@
   - Go module、Cobra CLI 和 SDK facade。
   - OS-neutral policy、capability report、execution plan、result/error 模型。
   - macOS Seatbelt、Linux bubblewrap、Windows local-user/ACL/firewall 后端的分阶段实现。
-  - CLI `run`、`doctor`、`policy`、`debug plan`；Windows 持久 identity setup 作为后续优化。
+  - CLI `run`、`doctor`、`setup`、`policy`、`debug plan`。
   - 跨平台测试、release、SBOM、provenance 接入。
 - 不包含：
   - Docker 作为默认 sandbox 实现。
@@ -38,7 +38,7 @@
 - 风险：Linux 环境可能缺少 user namespace 或 bubblewrap。
   缓解方式：`doctor` 提前检测；后续评估 vendored helper。
 - 风险：Windows 强网络限制和 sandbox identity setup 需要高权限。
-  缓解方式：当前使用持久但默认禁用的 `sandboxlocal` 本地用户，运行时重置随机密码、启用、授予 batch logon right，并配置 per-user firewall；后续把该流程优化成显式 setup 命令。
+  缓解方式：当前使用持久但默认禁用的 `sandboxlocal` 本地用户；`sandbox-local setup windows` 显式检查/创建账户、batch logon right、Task Scheduler、Firewall 和 OpenSSH 状态；运行时通过 per-user firewall 和 host proxy 实现 offline/allowlist。
 - 风险：Windows arm64/UTM 中备用凭据直启路径不稳定。
   缓解方式：已确认 `LogonUser/CreateProcessWithTokenW` 与 PowerShell `Start-Process -Credential` 会触发 `0xC0000142`；当前 Windows runner 改为一次性 Scheduled Task 路线，不再把直启路径作为闭环。
 - 风险：路径、symlink、junction、glob、IP canonicalization 可能造成绕过。
@@ -110,6 +110,10 @@
   - `ssh Leo@192.168.64.3 "cd /d C:\Users\Leo\sandbox-local-agent && sandbox-local.exe run --network open -- cmd.exe /c echo final-windows-smoke"`，确认真实后端可运行。
   - 验证 `--deny-read secret.txt` 返回 Access is denied；验证 `.git` 写入被拒绝；验证 `--network open` 可访问 `https://example.com`；验证默认 offline 阻断 `curl.exe`。
   - cleanup 检查确认无 `sandbox-local-*` scheduled task 和 firewall rule；`sandboxlocal` 账号保留但处于 disabled。此前调试临时用户留下的 loaded `sbx*` profile 需要重启 Windows 后再清理，当前实现不会继续创建新的 `sbx*` 用户。
+- 2026-04-22 三端 SDK E2E：
+  - macOS：`make ci`、`./scripts/e2e-sdk.sh`、`go test -tags integration ./tests/e2e` 通过。SDK integration 构建 helper binary 后验证 cwd 写 allow、`.git` 写 deny、`secret.txt` 读 deny、默认 offline 阻断、allowlist 允许 `example.com`、拒绝 `openai.com`、`curl --noproxy '*'` 直连绕过被阻断。
+  - Linux：`orb -m sandbox-local-linux go test ./...`、`orb -m sandbox-local-linux go test -tags integration ./tests/e2e` 通过。修正 SDK 场景下 Linux allowlist helper 不能假设 `os.Executable()` 是 CLI 的问题，并让 seccomp exec wrapper 对命令名执行 PATH lookup。
+  - Windows：重启后 SSH 恢复，清理旧 `sbx*` profile；`go test ./...`、`go build -o bin\sandbox-local.exe .\cmd\sandbox-local`、`bin\sandbox-local.exe setup windows`、`go test -tags integration ./tests/e2e` 通过。额外手工验证 `doctor` 暴露 `offline, allowlist, open`，allowlist 允许 `example.com`，非 allowlisted `openai.com` 返回 proxy 403，`--noproxy` 直连返回连接失败；cleanup 后无 `sandbox-local-*` scheduled task/firewall，`sandboxlocal` 保持 disabled。
 - 2026-04-21 release：
   - `VERSION=0.1.0-test ./scripts/release-package.sh`
   - `jq . dist/release-manifest.json`
@@ -130,13 +134,18 @@
 - [x] 2026-04-21：完成 Windows 后端最小闭环：临时本地用户、ACL read/write 策略、offline/open 网络模式；2026-04-22 已替换为持久 `sandboxlocal` + scheduled task runner。
 - [x] 2026-04-21：复验 Windows 临时用户/profile/firewall cleanup；确认 cleanup 正常。
 - [x] 2026-04-22：解决 UTM Windows arm64 中备用凭据启动 `cmd.exe` / `whoami.exe` / `powershell.exe` 返回 `0xC0000142` 的兼容性问题；Windows runner 改走一次性 Scheduled Task。
+- [x] 2026-04-22：补 `sandbox-local setup windows` 和 SDK `Manager.Setup`，显式检查 Windows sandbox identity 与系统能力。
+- [x] 2026-04-22：实现 Windows allowlist 网络：host-managed HTTP/HTTPS proxy + per-user outbound firewall，验证允许域、拒绝域和 `--noproxy` 直连绕过阻断。
+- [x] 2026-04-22：新增 `tests/e2e` SDK integration 和 `scripts/e2e-sdk.{sh,ps1}`，三端通过同一 SDK 调用链路验证文件和网络隔离。
+- [x] 2026-04-22：补 helper binary resolution，SDK 上层应用可通过 `Options.HelperPath` / `SANDBOX_LOCAL_HELPER` 指向 `sandbox-local` helper，避免 Linux bridge / Windows runner 误执行业务进程。
 - [x] 2026-04-21：完成三平台基础验证。macOS/Linux 跑真实 sandbox CLI；Windows 跑 `go test ./...`、build、doctor、policy 和 noop run。
 - [x] 2026-04-21：完成 release 接入，把 `scripts/release-package.sh` 从模板元数据包替换为真实二进制产物。
 
-## 下次 TODO
+## 后续增强
 
-- [ ] Windows：补 `sandbox-local setup windows`，显式创建/检查 `sandboxlocal`、batch logon right、OpenSSH/Task Scheduler/Firewall 能力，减少每次运行的高权限 setup。
-- [ ] Windows：补 allowlist 网络实现，优先评估 WFP 或本地强制代理方案。
+- [ ] 把 `go test -tags integration ./tests/e2e` 接入真实三平台 CI runner；Windows runner 需要管理员权限和可用 Task Scheduler/Firewall。
+- [ ] 继续补 junction、glob、IP canonicalization、localhost/loopback 细分策略的安全回归；如需要隔离 Windows loopback 本地服务，再评估 WFP filter。
+- [ ] 补 SBOM/provenance 和安装脚本，把 helper binary 分发约定写入 release 文档。
 
 ## 决策记录
 
@@ -147,6 +156,7 @@
 - 2026-04-21：第一轮实现先支持 macOS/Linux 的 `offline` 与 `open` 网络模式；domain allowlist 需要 host-managed proxy，暂不静默伪实现。
 - 2026-04-21：macOS/Linux allowlist 改为强 enforcement：macOS 只放行本地代理端口；Linux 使用 bwrap network namespace、loopback bridge、Unix socket host proxy 和 seccomp wrapper。
 - 2026-04-21：Windows 第一轮采用临时本地用户作为 sandbox identity，运行时创建并清理用户、ACL 和 firewall rule；用机器级 mutex 串行化 ACL setup / cleanup，避免并发运行互相恢复旧 DACL。
-- 2026-04-21：Windows `allowlist` 暂不声明支持；capability report 只暴露 `offline` 与 `open`，请求 allowlist 时必须失败。
 - 2026-04-21：Windows runner 保持 local-user/Job Object 路线，但当前 UTM Windows arm64 的备用凭据启动路径不稳定；在找到稳定 helper 前，不把 Windows E2E 计为完备。
 - 2026-04-22：Windows runner 改为持久禁用 `sandboxlocal` identity + 一次性 Scheduled Task；不再使用 `CreateProcessWithTokenW` 直启目标命令。该方案会保留一个 disabled 本地账户和 profile，换取稳定启动与避免 per-run profile 泄漏。
+- 2026-04-22：SDK 场景不再假设当前进程就是 CLI；Linux allowlist bridge 和 Windows runner 统一通过 helper binary resolution 进入 internal command。CLI 自身默认使用当前 binary，上层 SDK 应传 `Options.HelperPath` 或设置 `SANDBOX_LOCAL_HELPER`。
+- 2026-04-22：Windows allowlist 采用 host-managed proxy + per-user firewall，而不是静默代理环境变量。代理负责域名策略，firewall 阻断直连绕过；loopback 保留给 managed proxy，并在 `doctor` 中作为平台差异提示。

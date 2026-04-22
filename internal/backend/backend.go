@@ -15,6 +15,10 @@ type Backend interface {
 	Prepare(context.Context, model.Request) (model.PreparedCommand, model.Cleanup, error)
 }
 
+type SetupBackend interface {
+	Setup(context.Context) (model.SetupReport, error)
+}
+
 func Select(ctx context.Context, pref model.BackendPreference, enforcement model.EnforcementMode) (Backend, model.CapabilityReport, error) {
 	if pref == "" {
 		pref = model.BackendAuto

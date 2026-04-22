@@ -42,6 +42,7 @@
 │   │   └── noop/                  # 显式 no-sandbox 后端，仅用于调试和测试
 │   ├── config/                    # CLI config 文件加载、合并、校验
 │   ├── fsx/                       # 路径规范化、symlink/junction 防绕过、默认保护路径
+│   ├── helper/                    # SDK 调用时解析 sandbox-local helper binary
 │   ├── network/                   # host proxy、allowlist、parent proxy、UDS bridge 抽象
 │   ├── process/                   # spawn、stdio、PTY、进程树清理
 │   ├── diagnostics/               # doctor、capability report、sanitized execution plan
@@ -95,14 +96,15 @@ type Policy struct {
 type Options struct {
     BackendPreference BackendPreference
     Enforcement       EnforcementMode
-    Logger            Logger
     EventSink         EventSink
+    HelperPath        string
 }
 
 func NewManager(opts Options) (*Manager, error)
 func (m *Manager) Run(ctx context.Context, req Request) (*Result, error)
 func (m *Manager) Prepare(ctx context.Context, req Request) (*Plan, error)
 func (m *Manager) Check(ctx context.Context) (*CapabilityReport, error)
+func (m *Manager) Setup(ctx context.Context, req SetupRequest) (*SetupReport, error)
 func (m *Manager) Close() error
 ```
 
@@ -111,6 +113,8 @@ func (m *Manager) Close() error
 - `Run` 是上层客户端最常用入口。
 - `Prepare` 返回脱敏后的执行计划，供 CLI `debug plan` 和客户端诊断使用。
 - `Check` 返回当前平台能力、缺失依赖和可用后端。
+- `Setup` 做平台显式预检/预创建；当前 Windows 会创建/检查 `sandboxlocal`、batch logon right、Task Scheduler、Firewall 和 OpenSSH 状态。
+- `HelperPath` 供 SDK 上层应用指定随 SDK 分发或安装在 PATH 中的 `sandbox-local` helper；CLI 自身默认用当前 binary。Linux allowlist bridge 和 Windows scheduled-task runner 都通过该 helper 进入 internal 命令，避免误重启上层应用进程。
 - `EnforcementMode` 至少包含 `Require` 与 `BestEffort`。默认推荐 `Require`，避免“以为被隔离，实际没隔离”。
 
 ## 策略模型
@@ -229,14 +233,14 @@ internal/backend/windows/
 
 实现路线：
 
-- 当前最小闭环使用持久但默认禁用的本地用户 `sandboxlocal` 作为 sandbox identity，并用机器级 mutex 串行化 ACL setup / cleanup。
-- 每次运行前重置 `sandboxlocal` 的随机密码、启用账号并授予 `SeBatchLogonRight`；运行后撤销本轮 batch logon right 并禁用账号。
+- 当前闭环使用持久但默认禁用的本地用户 `sandboxlocal` 作为 sandbox identity，并用机器级 mutex 串行化 ACL setup / cleanup。
+- `sandbox-local setup windows` 可显式创建/检查 `sandboxlocal`、授予 `SeBatchLogonRight`、检查 Task Scheduler、Windows Firewall、OpenSSH Server 和 `New-NetFirewallRule` 能力；setup 结束后账户保持 disabled。
+- 每次运行前重置 `sandboxlocal` 的随机密码、启用账号并确保 batch logon right；运行后禁用账号。setup 已经授予的 batch logon right 会保留，避免每轮都撤销再恢复。
 - 文件权限通过 ACL / DACL / ACE 表达 allow / deny，运行后恢复原始 DACL。
 - 进程启动通过一次性 Windows Scheduled Task runner 完成；runner 在受控目录生成 PowerShell wrapper，捕获 stdout/stderr/exit code 后回放给 CLI。
 - `offline` 网络通过 Windows Firewall per-user outbound block 规则实现；规则使用 `sandboxlocal` SID 的 SDDL 表达，运行后清理。
-- `allowlist` 网络暂未实现，`CapabilityReport.NetworkModes` 只暴露 `offline` 与 `open`，请求 allowlist 时必须失败。
+- `allowlist` 网络通过 host-managed HTTP/HTTPS proxy + per-user outbound firewall block 实现。代理负责域名 allow/deny，firewall 阻断 `--noproxy` 等直连绕过；loopback 会保留给 managed proxy，`doctor` 会显式提示这一平台差异。
 - UTM Windows arm64 复验确认 `LogonUser/CreateProcessWithTokenW` 与 PowerShell `Start-Process -Credential` 在 SSH service 场景下会让进程以 `0xC0000142` 退出；当前实现已避开这条路径。
-- 后续可以把 `sandboxlocal` 的创建、权限授予和健康检查显式拆成 `sandbox-local setup windows`，减少每次运行的高权限操作。
 
 ## CLI 形态
 
@@ -245,11 +249,11 @@ CLI 由 Cobra 组织，所有命令通过 `pkg/sandbox`：
 ```text
 sandbox-local run [flags] -- <command...>
 sandbox-local doctor
+sandbox-local setup windows
 sandbox-local policy init
 sandbox-local policy validate <file>
 sandbox-local policy explain <file>
 sandbox-local debug plan [flags] -- <command...>
-sandbox-local setup windows     # future: pre-create/check Windows sandbox identity
 sandbox-local version
 ```
 
@@ -293,9 +297,9 @@ profiles:
 
 ## 测试策略
 
-- 单元测试：策略合并、domain pattern、path canonicalization、默认保护路径。
+- 单元测试：策略合并、domain pattern、path canonicalization、helper resolution、默认保护路径。
 - Golden tests：macOS SBPL、Linux bwrap argv、Windows ACL/firewall plan。
-- 集成测试：按 build tag 或环境变量启用真实 sandbox，避免在不支持的平台误报。
+- 集成测试：`go test -tags integration ./tests/e2e` 通过 SDK 模拟上层应用调用链路，并构建 helper binary 验证 macOS/Linux/Windows 的文件隔离、offline、allowlist 允许/拒绝和直接绕过阻断。
 - 安全回归测试：symlink/junction、missing path、glob、IP canonicalization、localhost/proxy 绕过。
 - CLI smoke：`run`、`doctor`、`policy validate` 在 CI 三平台运行。
 
@@ -304,7 +308,7 @@ profiles:
 1. 初始化 Go module、Cobra CLI 骨架、SDK facade、policy model、noop backend、CLI smoke test。
 2. 落 macOS Seatbelt 后端，支持文件策略和 offline / allowlist 网络代理。
 3. 落 Linux bubblewrap 后端，先支持 filesystem 与 offline，再补 managed proxy 与 seccomp。
-4. 稳定 Windows 后端，补 setup helper、ACL/firewall 回归、allowlist 或 WFP 方案。
+4. 稳定 Windows 后端，补 setup helper、ACL/firewall 回归和 allowlist。
 5. 补 release 矩阵、SBOM、provenance、安装脚本和跨平台 E2E。
 
 ## 关键风险

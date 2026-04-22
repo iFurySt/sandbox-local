@@ -20,6 +20,7 @@ import (
 	"unsafe"
 
 	"github.com/iFurySt/sandbox-local/internal/fsx"
+	"github.com/iFurySt/sandbox-local/internal/helper"
 	"github.com/iFurySt/sandbox-local/internal/model"
 	syswindows "golang.org/x/sys/windows"
 )
@@ -69,9 +70,9 @@ func (b Backend) Check(ctx context.Context) model.CapabilityReport {
 		Platform:     b.Platform(),
 		Available:    true,
 		Sandboxed:    true,
-		NetworkModes: []string{string(model.NetworkOffline), string(model.NetworkOpen)},
-		Warnings:     []string{"network allowlist is not supported by the Windows backend yet"},
-		Notes:        []string{"Windows enforcement uses a disabled local sandbox user, filesystem ACLs, one-shot scheduled tasks, and outbound firewall rules for offline mode"},
+		NetworkModes: []string{string(model.NetworkOffline), string(model.NetworkAllowlist), string(model.NetworkOpen)},
+		Warnings:     []string{"Windows network allowlist uses a host-managed proxy plus per-user outbound firewall blocking; loopback remains available for the managed proxy"},
+		Notes:        []string{"Windows enforcement uses a disabled local sandbox user, filesystem ACLs, one-shot scheduled tasks, and per-user outbound firewall rules"},
 	}
 	for _, name := range []string{"net.exe", "powershell.exe", "schtasks.exe"} {
 		if _, err := exec.LookPath(name); err != nil {
@@ -84,17 +85,104 @@ func (b Backend) Check(ctx context.Context) model.CapabilityReport {
 		report.Available = false
 		report.Sandboxed = false
 		report.Missing = append(report.Missing, "elevated administrator token")
-		report.Warnings = append(report.Warnings, "Windows sandbox setup needs elevation to create temporary users, edit ACLs, and manage firewall rules")
+		report.Warnings = append(report.Warnings, "Windows sandbox setup needs elevation to manage sandboxlocal, edit ACLs, create scheduled tasks, and manage firewall rules")
 	}
 	return report
+}
+
+func (b Backend) Setup(ctx context.Context) (model.SetupReport, error) {
+	report := model.SetupReport{
+		Backend:  b.Name(),
+		Platform: b.Platform(),
+		Ready:    true,
+		Notes: []string{
+			"setup leaves the sandboxlocal account disabled after provisioning",
+			"OpenSSH Server is only required for remote validation, not for local SDK usage",
+		},
+	}
+	check := b.Check(ctx)
+	report.Missing = append(report.Missing, check.Missing...)
+	report.Warnings = append(report.Warnings, check.Warnings...)
+	report.Notes = append(report.Notes, check.Notes...)
+	if !check.Available {
+		report.Ready = false
+		return report, fmt.Errorf("backend %q is unavailable: %s", b.Name(), strings.Join(check.Missing, ", "))
+	}
+	if status, err := windowsServiceStatus(ctx, "Schedule"); err != nil {
+		report.Ready = false
+		report.Missing = append(report.Missing, "Task Scheduler service")
+		return report, err
+	} else if !strings.EqualFold(status, "Running") {
+		report.Ready = false
+		report.Missing = append(report.Missing, "Task Scheduler service running")
+		return report, fmt.Errorf("Task Scheduler service is %s", status)
+	}
+	if status, err := windowsServiceStatus(ctx, "MpsSvc"); err != nil {
+		report.Ready = false
+		report.Missing = append(report.Missing, "Windows Firewall service")
+		return report, err
+	} else if !strings.EqualFold(status, "Running") {
+		report.Ready = false
+		report.Missing = append(report.Missing, "Windows Firewall service running")
+		return report, fmt.Errorf("Windows Firewall service is %s", status)
+	}
+	if _, err := powerShellOutput(ctx, "Get-Command New-NetFirewallRule -ErrorAction Stop | Out-Null; 'ok'"); err != nil {
+		report.Ready = false
+		report.Missing = append(report.Missing, "New-NetFirewallRule")
+		return report, err
+	}
+	if status, err := windowsServiceStatus(ctx, "sshd"); err != nil {
+		report.Warnings = append(report.Warnings, "OpenSSH Server service is not installed or not readable")
+	} else if !strings.EqualFold(status, "Running") {
+		report.Warnings = append(report.Warnings, fmt.Sprintf("OpenSSH Server service is %s", status))
+	}
+
+	lock, err := acquireSetupLock()
+	if err != nil {
+		report.Ready = false
+		return report, err
+	}
+	state := &sandboxState{lock: lock}
+	defer state.releaseLockOnly()
+
+	username, password, err := newLocalCredential()
+	if err != nil {
+		report.Ready = false
+		return report, err
+	}
+	existed := localUserExists(ctx, username)
+	if err := createLocalUser(ctx, username, password); err != nil {
+		report.Ready = false
+		return report, err
+	}
+	report.Changed = true
+	if existed {
+		report.Actions = append(report.Actions, "reset sandboxlocal password")
+	} else {
+		report.Actions = append(report.Actions, "created sandboxlocal user")
+	}
+	sid, _, err := lookupSID(username)
+	if err != nil {
+		report.Ready = false
+		return report, err
+	}
+	if err := grantAccountRight(sid, seBatchLogonRight); err != nil {
+		report.Ready = false
+		return report, fmt.Errorf("grant batch logon right to sandbox Windows user: %w", err)
+	}
+	report.Actions = append(report.Actions, "granted SeBatchLogonRight to sandboxlocal")
+	if err := disableLocalUser(ctx, username); err != nil {
+		report.Ready = false
+		return report, err
+	}
+	report.Actions = append(report.Actions, "disabled sandboxlocal user")
+	report.Ready = true
+	return report, nil
 }
 
 func (b Backend) Prepare(ctx context.Context, req model.Request) (model.PreparedCommand, model.Cleanup, error) {
 	if len(req.Command) == 0 {
 		return model.PreparedCommand{}, nil, fmt.Errorf("command is required")
-	}
-	if req.Policy.Network.Mode == model.NetworkAllowlist {
-		return model.PreparedCommand{}, nil, fmt.Errorf("backend %q does not support network allowlist enforcement", b.Name())
 	}
 	cwd := req.Cwd
 	if cwd == "" {
@@ -104,7 +192,7 @@ func (b Backend) Prepare(ctx context.Context, req model.Request) (model.Prepared
 			return model.PreparedCommand{}, nil, err
 		}
 	}
-	absCwd, err := filepath.Abs(cwd)
+	absCwd, err := fsx.Abs(cwd, "")
 	if err != nil {
 		return model.PreparedCommand{}, nil, err
 	}
@@ -112,11 +200,11 @@ func (b Backend) Prepare(ctx context.Context, req model.Request) (model.Prepared
 	if !report.Available {
 		return model.PreparedCommand{}, nil, fmt.Errorf("backend %q is unavailable: %s", b.Name(), strings.Join(report.Missing, ", "))
 	}
-	state, warnings, err := setup(ctx, req.Policy, absCwd)
+	state, warnings, err := setup(ctx, req.Policy, absCwd, req.ManagedProxyPort)
 	if err != nil {
 		return model.PreparedCommand{}, nil, err
 	}
-	exe, err := os.Executable()
+	exe, err := helper.Resolve(req.HelperPath)
 	if err != nil {
 		_ = state.Cleanup(context.Background())
 		return model.PreparedCommand{}, nil, err
@@ -159,7 +247,7 @@ type aclSnapshot struct {
 	sddl string
 }
 
-func setup(ctx context.Context, policy model.Policy, cwd string) (*sandboxState, []string, error) {
+func setup(ctx context.Context, policy model.Policy, cwd string, managedProxyPort int) (*sandboxState, []string, error) {
 	lock, err := acquireSetupLock()
 	if err != nil {
 		return nil, nil, err
@@ -201,6 +289,16 @@ func setup(ctx context.Context, policy model.Policy, cwd string) (*sandboxState,
 			return nil, nil, err
 		}
 		state.ruleName = ruleName
+	case model.NetworkAllowlist:
+		if managedProxyPort <= 0 {
+			return nil, nil, fmt.Errorf("network allowlist requires a managed proxy port")
+		}
+		ruleName := "sandbox-local-" + username
+		if err := addOfflineFirewallRule(ctx, ruleName, sidString); err != nil {
+			return nil, nil, err
+		}
+		state.ruleName = ruleName
+		warnings = append(warnings, fmt.Sprintf("Windows allowlist is enforced through HTTP_PROXY/HTTPS_PROXY on 127.0.0.1:%d and a per-user outbound firewall block", managedProxyPort))
 	case model.NetworkOpen:
 	default:
 		return nil, nil, fmt.Errorf("unsupported network mode %q", policy.Network.Mode)
@@ -222,7 +320,7 @@ func (s *sandboxState) Cleanup(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	if s.batchLogonGranted && s.username != "" {
+	if s.batchLogonGranted && s.username != "" && !s.persistentUser {
 		if sid, _, err := lookupSID(s.username); err == nil {
 			if err := removeAccountRight(sid, seBatchLogonRight); err != nil {
 				errs = append(errs, err)
@@ -259,6 +357,15 @@ func (s *sandboxState) Cleanup(ctx context.Context) error {
 		s.lock = 0
 	}
 	return errors.Join(errs...)
+}
+
+func (s *sandboxState) releaseLockOnly() {
+	if s.lock == 0 {
+		return
+	}
+	_ = syswindows.ReleaseMutex(s.lock)
+	_ = syswindows.CloseHandle(s.lock)
+	s.lock = 0
 }
 
 func acquireSetupLock() (syswindows.Handle, error) {
@@ -472,12 +579,39 @@ func createLocalUser(ctx context.Context, username string, password string) erro
 	return nil
 }
 
+func localUserExists(ctx context.Context, username string) bool {
+	return exec.CommandContext(ctx, "net", "user", username).Run() == nil
+}
+
 func disableLocalUser(ctx context.Context, username string) error {
 	cmd := exec.CommandContext(ctx, "net", "user", username, "/active:no")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("disable sandbox Windows user: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func windowsServiceStatus(ctx context.Context, name string) (string, error) {
+	script := fmt.Sprintf("(Get-Service -Name '%s' -ErrorAction Stop).Status.ToString()", escapePowerShellSingleQuoted(name))
+	out, err := powerShellOutput(ctx, script)
+	if err != nil {
+		return "", fmt.Errorf("check Windows service %q: %w", name, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func powerShellOutput(ctx context.Context, script string) (string, error) {
+	cmd := exec.CommandContext(ctx,
+		"powershell.exe",
+		"-NoProfile",
+		"-ExecutionPolicy", "Bypass",
+		"-Command", script,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
 }
 
 func deleteLocalUser(ctx context.Context, username string) error {

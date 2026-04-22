@@ -51,6 +51,20 @@ func TestNoopManagerPrepare(t *testing.T) {
 	}
 }
 
+func TestNoopManagerSetup(t *testing.T) {
+	manager, err := NewManager(Options{BackendPreference: BackendNoop})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := manager.Setup(context.Background(), SetupRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Backend != "noop" || !report.Ready {
+		t.Fatalf("unexpected setup report: %+v", report)
+	}
+}
+
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("SANDBOX_LOCAL_HELPER_PROCESS") != "1" {
 		return

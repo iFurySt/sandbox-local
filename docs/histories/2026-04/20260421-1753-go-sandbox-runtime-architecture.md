@@ -42,6 +42,16 @@
 - 复验 Windows：真实后端 smoke、`.git` 写拒绝、`--deny-read`、`--network open`、默认 offline 均通过；cleanup 后不再新增 `sbx*` 临时用户，保留 disabled `sandboxlocal` 作为预期状态。
 - 同步架构文档、执行计划、质量评分和发布记录，把 Windows `0xC0000142` 阻塞改为已处理，并记录后续 `setup windows` 与 allowlist/WFP TODO。
 
+## 2026-04-22 二次补充
+
+- 新增 SDK `Manager.Setup` / `SetupReport` 与 CLI `sandbox-local setup windows`；Windows setup 会检查/创建 `sandboxlocal`、授予 `SeBatchLogonRight`、检查 Task Scheduler、Windows Firewall、OpenSSH Server 和 `New-NetFirewallRule`，结束后保持账户 disabled。
+- Windows `CapabilityReport.NetworkModes` 增加 `allowlist`。实现方式为 host-managed HTTP/HTTPS proxy 负责域名 allow/deny，Windows per-user outbound firewall 负责阻断 `--noproxy` 等直连绕过；`doctor` 会提示 loopback 保留给 managed proxy。
+- 新增 `internal/helper` 和 SDK `Options.HelperPath`，支持上层应用显式指定 `sandbox-local` helper binary。Linux allowlist bridge 和 Windows scheduled-task runner 不再假设 `os.Executable()` 是 CLI，避免 SDK 上层应用被误当 helper 重启。
+- 修复 Linux seccomp exec wrapper 直接 `syscall.Exec("curl", ...)` 不查 PATH 的问题，使 SDK 传普通命令名也能工作。
+- 修复 macOS Seatbelt 文件 read/write deny 的路径规则：路径 canonicalize 现有 symlink 前缀，Seatbelt allow 规则通过 `require-not` 排除 deny 路径，避免 writable root 重新放开 `.git` 或 read-deny 文件。
+- 新增 `tests/e2e/sdk_enforcement_test.go` 与 `scripts/e2e-sdk.sh` / `scripts/e2e-sdk.ps1`。集成测试模拟上层 SDK 调用链路，构建 helper binary 后验证 cwd 写 allow、`.git` 写 deny、secret read deny、offline、allowlist 允许/拒绝和直接绕过阻断。
+- 三端验证完成：macOS `make ci` 与 SDK E2E 通过；Linux OrbStack `go test ./...` 与 SDK E2E 通过；Windows SSH 远端 `go test ./...`、build、`setup windows`、SDK E2E、CLI allowlist 手工校验和 cleanup 检查均通过。Windows 旧 `sbx*` profile 已在重启后清理，`sandboxlocal` 保持 disabled。
+
 ## 受影响文件
 
 - `docs/ARCHITECTURE.md`
@@ -58,5 +68,8 @@
 - `internal/`
 - `configs/examples/default.yaml`
 - `scripts/ci.sh`
+- `scripts/e2e-sdk.sh`
+- `scripts/e2e-sdk.ps1`
 - `scripts/release-package.sh`
+- `tests/e2e/`
 - `docs/releases/feature-release-notes.md`

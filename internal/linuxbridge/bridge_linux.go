@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -96,10 +97,18 @@ func ExecWithSeccomp(command []string) error {
 	if len(command) == 0 {
 		return errors.New("command is required")
 	}
+	target := command[0]
+	if !strings.ContainsRune(target, rune(os.PathSeparator)) {
+		resolved, err := exec.LookPath(target)
+		if err != nil {
+			return err
+		}
+		target = resolved
+	}
 	if err := installNoUnixSocketFilter(); err != nil {
 		return err
 	}
-	return syscall.Exec(command[0], command, os.Environ())
+	return syscall.Exec(target, command, os.Environ())
 }
 
 func installNoUnixSocketFilter() error {
