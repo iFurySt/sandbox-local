@@ -32,6 +32,16 @@
 - Windows profile 目录需要显式清理，因为 `net user /delete` 不会删除 `LOGON_WITH_PROFILE` 创建的用户目录。
 - 当前 Windows arm64/UTM 的备用凭据启动问题不应被隐藏为成功；后续需要改为更稳定的 Windows helper、持久 identity、restricted token/AppContainer 或 WFP 方案。
 
+## 2026-04-22 补充
+
+- 复验新装 Windows/UTM 环境，确认 SSH、管理员令牌、`doctor` 和 noop backend 正常。
+- 复现 `cmd.exe` 在真实 Windows 后端下返回 `0xC0000142`；对照验证 PowerShell `Start-Process -Credential` 同样返回 `-1073741502`，说明问题不局限于 Go runner。
+- Windows 后端从 per-run 临时用户改为持久但默认禁用的 `sandboxlocal` identity；每次运行前重置随机密码、启用账号并授予 `SeBatchLogonRight`，运行后撤销本轮 right 并禁用账号。
+- Windows runner 删除 `CreateProcessWithTokenW` 直启路径，改为注册一次性 Scheduled Task，在 task 中运行 PowerShell wrapper，并回放 stdout/stderr/exit code。
+- 修正 PowerShell 5.1 重定向 UTF-16LE 输出回放，以及 native stderr 被包装成 PowerShell ErrorRecord 的问题。
+- 复验 Windows：真实后端 smoke、`.git` 写拒绝、`--deny-read`、`--network open`、默认 offline 均通过；cleanup 后不再新增 `sbx*` 临时用户，保留 disabled `sandboxlocal` 作为预期状态。
+- 同步架构文档、执行计划、质量评分和发布记录，把 Windows `0xC0000142` 阻塞改为已处理，并记录后续 `setup windows` 与 allowlist/WFP TODO。
+
 ## 受影响文件
 
 - `docs/ARCHITECTURE.md`

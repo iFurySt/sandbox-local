@@ -37,10 +37,10 @@
   缓解方式：引入 `CapabilityReport` 和 `EnforcementMode`，默认 `Require`。
 - 风险：Linux 环境可能缺少 user namespace 或 bubblewrap。
   缓解方式：`doctor` 提前检测；后续评估 vendored helper。
-- 风险：Windows 强网络限制需要高权限 setup。
-  缓解方式：第一阶段运行时创建临时本地用户并配置 per-user firewall；后续把该流程优化成显式 setup 命令。
-- 风险：Windows arm64/UTM 中备用凭据启动路径不稳定。
-  缓解方式：当前已记录 `0xC0000142` 阻塞；后续评估持久 sandbox identity、服务 helper、restricted token/AppContainer 或 WFP 方案，不能把不稳定启动路径标成完备。
+- 风险：Windows 强网络限制和 sandbox identity setup 需要高权限。
+  缓解方式：当前使用持久但默认禁用的 `sandboxlocal` 本地用户，运行时重置随机密码、启用、授予 batch logon right，并配置 per-user firewall；后续把该流程优化成显式 setup 命令。
+- 风险：Windows arm64/UTM 中备用凭据直启路径不稳定。
+  缓解方式：已确认 `LogonUser/CreateProcessWithTokenW` 与 PowerShell `Start-Process -Credential` 会触发 `0xC0000142`；当前 Windows runner 改为一次性 Scheduled Task 路线，不再把直启路径作为闭环。
 - 风险：路径、symlink、junction、glob、IP canonicalization 可能造成绕过。
   缓解方式：优先建设安全回归测试和 golden test。
 
@@ -49,7 +49,7 @@
 1. 初始化 Go module、Cobra CLI、SDK facade、policy model、noop backend、CLI smoke test。
 2. 实现 macOS Seatbelt 后端，覆盖 filesystem、offline network、allowlist proxy。
 3. 实现 Linux bubblewrap 后端，先覆盖 filesystem 和 offline network，再补 managed proxy 与 seccomp。
-4. 实现 Windows local-user 后端，覆盖 ACL、firewall、Job Object，再评估持久 setup helper。
+4. 实现 Windows local-user 后端，覆盖 ACL、firewall、scheduled task runner，再评估显式 setup helper。
 5. 补齐三平台 CI、release artifact、SBOM、provenance 和 E2E。
 
 ## 验证方式
@@ -62,7 +62,7 @@
 - 手工检查：
   - macOS 验证敏感路径读写拒绝和 allowlist 网络。
   - Linux 验证 bwrap mount plan、network namespace、proxy bridge。
-  - Windows 验证 local-user sandbox identity、ACL、firewall、Job Object cleanup。
+  - Windows 验证 local-user sandbox identity、ACL、firewall、scheduled task cleanup。
 - 观测检查：
   - SDK event 和 CLI `--json` 输出包含 backend、capability、denial、exit status。
 
@@ -103,6 +103,13 @@
   - 后续补丁新增临时用户 profile 目录清理、机器级 mutex `ERROR_ALREADY_EXISTS` 处理、请求 env JSON 转发，并把 runner 从手写环境块调整为 `LogonUserW` + `CreateEnvironmentBlock` + `CreateProcessWithTokenW`。
   - UTM Windows SSH 恢复后复验：`go test ./...`、Windows build、`doctor` 均通过；cleanup 检查显示无残留 `sbx*` 用户/profile 与 `sandbox-local-*` firewall rule。
   - 阻塞：最终复验中 `cmd.exe`、`whoami.exe`、`where.exe`、`powershell.exe` 在备用凭据路径下反复返回 `0xC0000142`。已排除/验证路径包括 `CreateProcessWithTokenW`、`LOGON_WITH_PROFILE`/profileless、Job Object on/off、PowerShell `Start-Process -Credential` 对照、batch logon token、OpenSSH 临时用户尝试；该问题当前限定在 Windows 进程启动兼容性，不能标记 Windows E2E 完备。
+- 2026-04-22 Windows：
+  - SSH 恢复后确认远端 `WIN-VT2FGSOBO07\Leo`、Windows `10.0.26100.8246`、OpenSSH Server running、管理员令牌可用。
+  - 复现真实 Windows 后端 `cmd.exe` 仍返回 `0xC0000142`；对照验证 PowerShell `Start-Process -Credential` 同样返回 `-1073741502`。
+  - 改为持久禁用账户 `sandboxlocal` + `SeBatchLogonRight` + 一次性 Scheduled Task runner，避开 `CreateProcessWithTokenW` 直启路径。
+  - `ssh Leo@192.168.64.3 "cd /d C:\Users\Leo\sandbox-local-agent && sandbox-local.exe run --network open -- cmd.exe /c echo final-windows-smoke"`，确认真实后端可运行。
+  - 验证 `--deny-read secret.txt` 返回 Access is denied；验证 `.git` 写入被拒绝；验证 `--network open` 可访问 `https://example.com`；验证默认 offline 阻断 `curl.exe`。
+  - cleanup 检查确认无 `sandbox-local-*` scheduled task 和 firewall rule；`sandboxlocal` 账号保留但处于 disabled。此前调试临时用户留下的 loaded `sbx*` profile 需要重启 Windows 后再清理，当前实现不会继续创建新的 `sbx*` 用户。
 - 2026-04-21 release：
   - `VERSION=0.1.0-test ./scripts/release-package.sh`
   - `jq . dist/release-manifest.json`
@@ -120,15 +127,16 @@
 - [x] 2026-04-21：完成 Linux 后端最小闭环：bubblewrap 文件写保护、offline/open 网络模式、CLI smoke。
 - [x] 2026-04-21：实现 host-managed HTTP/HTTPS allowlist proxy，并先接入 macOS 强 enforcement。
 - [x] 2026-04-21：实现 Linux allowlist 的 UDS proxy bridge 和 seccomp exec wrapper；验证允许域、拒绝域和 AF_UNIX socket 阻断。
-- [x] 2026-04-21：完成 Windows 后端最小闭环：临时本地用户、ACL read/write 策略、Job Object cleanup、offline/open 网络模式。
+- [x] 2026-04-21：完成 Windows 后端最小闭环：临时本地用户、ACL read/write 策略、offline/open 网络模式；2026-04-22 已替换为持久 `sandboxlocal` + scheduled task runner。
 - [x] 2026-04-21：复验 Windows 临时用户/profile/firewall cleanup；确认 cleanup 正常。
-- [ ] 解决 UTM Windows arm64 中备用凭据启动 `cmd.exe` / `whoami.exe` / `powershell.exe` 返回 `0xC0000142` 的兼容性问题。
+- [x] 2026-04-22：解决 UTM Windows arm64 中备用凭据启动 `cmd.exe` / `whoami.exe` / `powershell.exe` 返回 `0xC0000142` 的兼容性问题；Windows runner 改走一次性 Scheduled Task。
 - [x] 2026-04-21：完成三平台基础验证。macOS/Linux 跑真实 sandbox CLI；Windows 跑 `go test ./...`、build、doctor、policy 和 noop run。
 - [x] 2026-04-21：完成 release 接入，把 `scripts/release-package.sh` 从模板元数据包替换为真实二进制产物。
 
 ## 下次 TODO
 
-- [ ] Windows：解决 UTM Windows arm64 中备用凭据启动 `cmd.exe` / `whoami.exe` / `powershell.exe` 返回 `0xC0000142` 的兼容性问题。优先评估持久 sandbox identity、常驻服务 helper、restricted token/AppContainer 或 WFP 方案；不要继续把 `CreateProcessWithTokenW` 的同一路径当作已验证闭环。
+- [ ] Windows：补 `sandbox-local setup windows`，显式创建/检查 `sandboxlocal`、batch logon right、OpenSSH/Task Scheduler/Firewall 能力，减少每次运行的高权限 setup。
+- [ ] Windows：补 allowlist 网络实现，优先评估 WFP 或本地强制代理方案。
 
 ## 决策记录
 
@@ -141,3 +149,4 @@
 - 2026-04-21：Windows 第一轮采用临时本地用户作为 sandbox identity，运行时创建并清理用户、ACL 和 firewall rule；用机器级 mutex 串行化 ACL setup / cleanup，避免并发运行互相恢复旧 DACL。
 - 2026-04-21：Windows `allowlist` 暂不声明支持；capability report 只暴露 `offline` 与 `open`，请求 allowlist 时必须失败。
 - 2026-04-21：Windows runner 保持 local-user/Job Object 路线，但当前 UTM Windows arm64 的备用凭据启动路径不稳定；在找到稳定 helper 前，不把 Windows E2E 计为完备。
+- 2026-04-22：Windows runner 改为持久禁用 `sandboxlocal` identity + 一次性 Scheduled Task；不再使用 `CreateProcessWithTokenW` 直启目标命令。该方案会保留一个 disabled 本地账户和 profile，换取稳定启动与避免 per-run profile 泄漏。

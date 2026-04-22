@@ -38,12 +38,12 @@
 │   │   ├── backend.go             # 后端接口和注册
 │   │   ├── macos/                 # Seatbelt / sandbox-exec
 │   │   ├── linux/                 # bubblewrap / namespaces / seccomp / proxy bridge
-│   │   ├── windows/               # local user / ACL / firewall / Job Object / helper
+│   │   ├── windows/               # persistent local user / ACL / firewall / scheduled task runner
 │   │   └── noop/                  # 显式 no-sandbox 后端，仅用于调试和测试
 │   ├── config/                    # CLI config 文件加载、合并、校验
 │   ├── fsx/                       # 路径规范化、symlink/junction 防绕过、默认保护路径
 │   ├── network/                   # host proxy、allowlist、parent proxy、UDS bridge 抽象
-│   ├── process/                   # spawn、stdio、PTY、进程树清理、Windows Job Object 封装
+│   ├── process/                   # spawn、stdio、PTY、进程树清理
 │   ├── diagnostics/               # doctor、capability report、sanitized execution plan
 │   └── testkit/                   # 供集成测试复用的 helper
 ├── configs/
@@ -224,19 +224,19 @@ internal/backend/windows/
 ├── acl.go
 ├── firewall.go
 ├── setup.go
-├── runner.go
-└── job.go
+└── runner.go
 ```
 
 实现路线：
 
-- 当前最小闭环使用每次运行创建的临时本地用户作为 sandbox identity，并用机器级 mutex 串行化 ACL setup / cleanup。
+- 当前最小闭环使用持久但默认禁用的本地用户 `sandboxlocal` 作为 sandbox identity，并用机器级 mutex 串行化 ACL setup / cleanup。
+- 每次运行前重置 `sandboxlocal` 的随机密码、启用账号并授予 `SeBatchLogonRight`；运行后撤销本轮 batch logon right 并禁用账号。
 - 文件权限通过 ACL / DACL / ACE 表达 allow / deny，运行后恢复原始 DACL。
-- Job Object 使用 `KILL_ON_JOB_CLOSE` 管住子进程生命周期。
-- `offline` 网络通过 Windows Firewall per-user outbound block 规则实现；规则使用临时用户 SID 的 SDDL 表达，运行后清理。
+- 进程启动通过一次性 Windows Scheduled Task runner 完成；runner 在受控目录生成 PowerShell wrapper，捕获 stdout/stderr/exit code 后回放给 CLI。
+- `offline` 网络通过 Windows Firewall per-user outbound block 规则实现；规则使用 `sandboxlocal` SID 的 SDDL 表达，运行后清理。
 - `allowlist` 网络暂未实现，`CapabilityReport.NetworkModes` 只暴露 `offline` 与 `open`，请求 allowlist 时必须失败。
-- 当前 UTM Windows arm64 复验暴露备用凭据启动兼容性阻塞：`LogonUser/CreateProcessWithTokenW` 与 PowerShell `Start-Process -Credential` 均会让部分系统程序以 `0xC0000142` 退出；后续 Windows 后端需要评估持久 sandbox identity、服务 helper、restricted token/AppContainer 或 WFP 方案。
-- 后续可以把每次创建临时用户优化为 `sandbox-local setup windows` 的持久 sandbox identity，减少运行时高权限操作。
+- UTM Windows arm64 复验确认 `LogonUser/CreateProcessWithTokenW` 与 PowerShell `Start-Process -Credential` 在 SSH service 场景下会让进程以 `0xC0000142` 退出；当前实现已避开这条路径。
+- 后续可以把 `sandboxlocal` 的创建、权限授予和健康检查显式拆成 `sandbox-local setup windows`，减少每次运行的高权限操作。
 
 ## CLI 形态
 
@@ -249,7 +249,7 @@ sandbox-local policy init
 sandbox-local policy validate <file>
 sandbox-local policy explain <file>
 sandbox-local debug plan [flags] -- <command...>
-sandbox-local setup windows     # future: persistent Windows sandbox identity
+sandbox-local setup windows     # future: pre-create/check Windows sandbox identity
 sandbox-local version
 ```
 
@@ -304,7 +304,7 @@ profiles:
 1. 初始化 Go module、Cobra CLI 骨架、SDK facade、policy model、noop backend、CLI smoke test。
 2. 落 macOS Seatbelt 后端，支持文件策略和 offline / allowlist 网络代理。
 3. 落 Linux bubblewrap 后端，先支持 filesystem 与 offline，再补 managed proxy 与 seccomp。
-4. 落 Windows restricted-token 后端，补 setup helper、ACL、firewall、Job Object。
+4. 稳定 Windows 后端，补 setup helper、ACL/firewall 回归、allowlist 或 WFP 方案。
 5. 补 release 矩阵、SBOM、provenance、安装脚本和跨平台 E2E。
 
 ## 关键风险

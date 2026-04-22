@@ -20,7 +20,7 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
         |
         +-- internal/backend/macos    # Seatbelt / sandbox-exec
         +-- internal/backend/linux    # bubblewrap / namespaces / seccomp
-        +-- internal/backend/windows  # temporary local user / ACL / firewall / Job Object
+        +-- internal/backend/windows  # persistent local user / ACL / firewall / scheduled task runner
         |
         +-- internal/network          # host proxy / bridge / allowlist
         +-- internal/fsx              # 路径规范化和保护路径
@@ -37,7 +37,7 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 - `internal/config/`：CLI 配置文件加载、合并和校验。
 - `internal/fsx/`：路径 canonicalization、symlink/junction 防绕过、默认敏感路径保护。
 - `internal/network/`：HTTP/SOCKS proxy、parent proxy、Unix socket / TCP bridge 抽象。
-- `internal/process/`：进程启动、PTY、超时、进程树清理、Windows Job Object 封装。
+- `internal/process/`：进程启动、PTY、超时和进程树清理。
 - `internal/diagnostics/`：`doctor`、能力报告、脱敏执行计划。
 - `configs/examples/`：示例 sandbox policy。
 - `docs/`：架构、计划、历史、发布和本地知识库。
@@ -55,7 +55,7 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 
 - macOS：固定调用 `/usr/bin/sandbox-exec`，动态生成 Seatbelt profile。
 - Linux：优先 bubblewrap / namespaces，后续补 seccomp 和 managed proxy bridge。
-- Windows：当前使用临时本地用户作为 sandbox identity，通过 ACL/DACL 表达文件读写策略，用 Job Object 管住进程树，并通过 Windows Firewall 的 per-user 规则实现 `offline` 网络。当前 UTM Windows arm64 环境中，备用凭据启动部分系统程序会返回 `0xC0000142`，Windows 后端仍需补一条更稳定的进程启动路径。
+- Windows：当前使用持久但默认禁用的本地用户 `sandboxlocal` 作为 sandbox identity；每次运行前重置随机密码并启用，授予 batch logon right，运行后禁用账户。文件策略通过 ACL/DACL 表达，进程启动通过一次性 Windows Scheduled Task runner 规避 UTM/SSH service 场景下 `CreateProcessWithTokenW` 的 `0xC0000142` 兼容性问题，`offline` 网络通过 Windows Firewall per-user 规则实现。
 
 任何平台无法强制执行的策略，都必须通过 capability report 或运行错误显式暴露，不能静默当作成功。
 
@@ -64,5 +64,5 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 - 已实现 Go module、SDK facade、Cobra CLI、配置加载和基础单元测试。
 - 已实现 macOS Seatbelt 后端的最小闭环：文件写 allow/deny、network `offline` / `allowlist` / `open`。`allowlist` 通过 host-managed HTTP/HTTPS proxy 强制执行，Seatbelt 只放行该本地代理端口。
 - 已实现 Linux bubblewrap 后端的最小闭环：只读根、writable roots、deny remount/mask、network `offline` / `allowlist` / `open`。`allowlist` 使用 `--unshare-net`、sandbox 内 loopback bridge、host Unix socket proxy 和 seccomp exec wrapper，阻断直接 AF_UNIX/socketpair 绕过。
-- 已实现 Windows local-user 后端的策略骨架：临时本地用户、ACL read/write allow/deny、Job Object cleanup、network `offline` / `open`。在本轮 UTM Windows arm64 复验中，`LogonUser/CreateProcessWithTokenW`、PowerShell `Start-Process -Credential`、batch token 和 OpenSSH 临时用户路径均未能稳定启动 `cmd.exe` / `whoami.exe` / `powershell.exe`，典型退出码为 `0xC0000142`；Windows `allowlist` 仍未支持，`doctor` 会显式报告。
+- 已实现 Windows local-user 后端闭环：持久禁用账户 `sandboxlocal`、ACL read/write allow/deny、一次性 scheduled task runner、network `offline` / `open`。UTM Windows arm64 上已验证 `cmd.exe`、文件读写 deny、open 网络和默认 offline 网络；Windows `allowlist` 仍未支持，`doctor` 会显式报告。
 - Release packaging 已从模板元数据包切换为真实 Go 二进制归档，覆盖 darwin/linux/windows 的 arm64/amd64。

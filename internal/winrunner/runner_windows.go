@@ -4,14 +4,19 @@ package winrunner
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"slices"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf16"
-	"unsafe"
 
 	syswindows "golang.org/x/sys/windows"
 )
@@ -21,15 +26,6 @@ const (
 	envWindowsPassword = "SANDBOX_LOCAL_WINDOWS_PASSWORD"
 	envWindowsDomain   = "SANDBOX_LOCAL_WINDOWS_DOMAIN"
 	envWindowsRequest  = "SANDBOX_LOCAL_WINDOWS_REQUEST_ENV"
-
-	createProcessWithTokenLogonFlags = 0x00000001
-	logon32LogonInteractive          = 2
-	logon32ProviderDefault           = 0
-)
-
-var (
-	procCreateProcessWithTokenW = syswindows.NewLazySystemDLL("advapi32.dll").NewProc("CreateProcessWithTokenW")
-	procLogonUserW              = syswindows.NewLazySystemDLL("advapi32.dll").NewProc("LogonUserW")
 )
 
 type ExitCodeError struct {
@@ -57,7 +53,7 @@ func Run(ctx context.Context, command []string) error {
 	if err != nil {
 		return err
 	}
-	code, err := runAsUser(ctx, user, domain, password, cwd, command)
+	code, err := runAsScheduledTask(ctx, user, domain, password, cwd, command)
 	if err != nil {
 		return err
 	}
@@ -67,194 +63,223 @@ func Run(ctx context.Context, command []string) error {
 	return nil
 }
 
-func runAsUser(ctx context.Context, user string, domain string, password string, cwd string, command []string) (int, error) {
-	if err := inheritStandardHandles(); err != nil {
-		return 0, err
-	}
-	job, err := createKillOnCloseJob()
+func runAsScheduledTask(ctx context.Context, user string, domain string, password string, cwd string, command []string) (int, error) {
+	id, err := randomID()
 	if err != nil {
 		return 0, err
 	}
-	defer syswindows.CloseHandle(job)
+	taskName := `\sandbox-local-` + id
+	workDir, err := os.MkdirTemp(cwd, ".sandbox-local-win-"+id+"-")
+	if err != nil {
+		return 0, err
+	}
+	defer os.RemoveAll(workDir)
 
-	token, err := logonUser(user, domain, password)
-	if err != nil {
+	stdoutPath := filepath.Join(workDir, "stdout.txt")
+	stderrPath := filepath.Join(workDir, "stderr.txt")
+	exitPath := filepath.Join(workDir, "exit.txt")
+	scriptPath := filepath.Join(workDir, "run.ps1")
+	if err := writeTaskScript(scriptPath, cwd, command, stdoutPath, stderrPath, exitPath); err != nil {
 		return 0, err
 	}
-	defer token.Close()
+	defer deleteTask(context.Background(), taskName)
 
-	commandLine, err := syswindows.UTF16FromString(syswindows.ComposeCommandLine(command))
-	if err != nil {
-		return 0, err
+	runAs := user
+	if domain != "" && domain != "." {
+		runAs = domain + `\` + user
+	} else if computer := os.Getenv("COMPUTERNAME"); computer != "" {
+		runAs = computer + `\` + user
 	}
-	envBlock, err := environmentBlock(token)
-	if err != nil {
-		return 0, err
+	start := time.Now().Add(5 * time.Minute).Format("15:04")
+	createArgs := []string{
+		"/Create",
+		"/TN", taskName,
+		"/SC", "ONCE",
+		"/ST", start,
+		"/TR", syswindows.ComposeCommandLine([]string{
+			"powershell.exe",
+			"-NoProfile",
+			"-ExecutionPolicy", "Bypass",
+			"-File", scriptPath,
+		}),
+		"/RU", runAs,
+		"/RP", password,
+		"/F",
 	}
-	cwd16, err := syswindows.UTF16PtrFromString(cwd)
-	if err != nil {
-		return 0, err
+	if out, err := exec.CommandContext(ctx, "schtasks.exe", createArgs...).CombinedOutput(); err != nil {
+		return 0, fmt.Errorf("create scheduled task: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	desktop16, err := syswindows.UTF16PtrFromString(`winsta0\default`)
-	if err != nil {
-		return 0, err
+	if out, err := exec.CommandContext(ctx, "schtasks.exe", "/Run", "/TN", taskName).CombinedOutput(); err != nil {
+		return 0, fmt.Errorf("run scheduled task: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	startup := syswindows.StartupInfo{
-		Cb:        uint32(unsafe.Sizeof(syswindows.StartupInfo{})),
-		Desktop:   desktop16,
-		Flags:     syswindows.STARTF_USESTDHANDLES,
-		StdInput:  syswindows.Handle(os.Stdin.Fd()),
-		StdOutput: syswindows.Handle(os.Stdout.Fd()),
-		StdErr:    syswindows.Handle(os.Stderr.Fd()),
-	}
-	var procInfo syswindows.ProcessInformation
-	creationFlags := uint32(syswindows.CREATE_UNICODE_ENVIRONMENT | syswindows.CREATE_SUSPENDED)
-	r1, _, callErr := procCreateProcessWithTokenW.Call(
-		uintptr(token),
-		uintptr(createProcessWithTokenLogonFlags),
-		0,
-		uintptr(unsafe.Pointer(&commandLine[0])),
-		uintptr(creationFlags),
-		uintptr(unsafe.Pointer(&envBlock[0])),
-		uintptr(unsafe.Pointer(cwd16)),
-		uintptr(unsafe.Pointer(&startup)),
-		uintptr(unsafe.Pointer(&procInfo)),
-	)
-	if r1 == 0 {
-		return 0, callErr
-	}
-	defer syswindows.CloseHandle(procInfo.Process)
-	defer syswindows.CloseHandle(procInfo.Thread)
 
-	if err := syswindows.AssignProcessToJobObject(job, procInfo.Process); err != nil {
-		_ = syswindows.TerminateProcess(procInfo.Process, 1)
+	code, err := waitForTaskExit(ctx, exitPath, taskName)
+	time.Sleep(1 * time.Second)
+	if replayErr := replayFile(stdoutPath, os.Stdout); replayErr != nil && err == nil {
+		err = replayErr
+	}
+	if replayErr := replayFile(stderrPath, os.Stderr); replayErr != nil && err == nil {
+		err = replayErr
+	}
+	if err != nil {
 		return 0, err
 	}
-	if _, err := syswindows.ResumeThread(procInfo.Thread); err != nil {
-		_ = syswindows.TerminateProcess(procInfo.Process, 1)
-		return 0, err
+	return code, nil
+}
+
+func writeTaskScript(path string, cwd string, command []string, stdoutPath string, stderrPath string, exitPath string) error {
+	requestEnv, err := requestEnvironment()
+	if err != nil {
+		return err
 	}
-	done := make(chan waitResult, 1)
-	go func() {
-		var exitCode uint32
-		_, waitErr := syswindows.WaitForSingleObject(procInfo.Process, syswindows.INFINITE)
-		if waitErr == nil {
-			waitErr = syswindows.GetExitCodeProcess(procInfo.Process, &exitCode)
+	var script strings.Builder
+	script.WriteString("$ErrorActionPreference = 'Continue'\r\n")
+	script.WriteString("Set-Location -LiteralPath ")
+	script.WriteString(powerShellString(cwd))
+	script.WriteString("\r\n")
+	for key, value := range requestEnv {
+		if !validEnvKey(key) {
+			continue
 		}
-		done <- waitResult{code: exitCode, err: waitErr}
-	}()
-	select {
-	case <-ctx.Done():
-		_ = syswindows.TerminateJobObject(job, 1)
-		_ = syswindows.TerminateProcess(procInfo.Process, 1)
-		return 0, ctx.Err()
-	case result := <-done:
-		if result.err != nil {
-			return 0, result.err
+		script.WriteString("$env:")
+		script.WriteString(key)
+		script.WriteString(" = ")
+		script.WriteString(powerShellString(value))
+		script.WriteString("\r\n")
+	}
+	script.WriteString("$out = ")
+	script.WriteString(powerShellString(stdoutPath))
+	script.WriteString("\r\n")
+	script.WriteString("$err = ")
+	script.WriteString(powerShellString(stderrPath))
+	script.WriteString("\r\n")
+	script.WriteString("$code = ")
+	script.WriteString(powerShellString(exitPath))
+	script.WriteString("\r\n")
+	script.WriteString("$proc = Start-Process -FilePath ")
+	script.WriteString(powerShellString(command[0]))
+	script.WriteString(" -ArgumentList @(")
+	for i, arg := range command[1:] {
+		if i > 0 {
+			script.WriteString(", ")
 		}
-		return int(result.code), nil
+		script.WriteString(powerShellString(arg))
+	}
+	script.WriteString(") -WorkingDirectory ")
+	script.WriteString(powerShellString(cwd))
+	script.WriteString(" -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru\r\n")
+	script.WriteString("$exitCode = $proc.ExitCode\r\n")
+	script.WriteString("Set-Content -LiteralPath $code -Value $exitCode -Encoding ascii\r\n")
+	return os.WriteFile(path, []byte(script.String()), 0o600)
+}
+
+func waitForTaskExit(ctx context.Context, exitPath string, taskName string) (int, error) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if raw, err := os.ReadFile(exitPath); err == nil {
+			code, parseErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if parseErr != nil {
+				return 0, fmt.Errorf("parse scheduled task exit code: %w", parseErr)
+			}
+			return code, nil
+		}
+		select {
+		case <-ctx.Done():
+			_ = deleteTask(context.Background(), taskName)
+			return 0, ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 
-type waitResult struct {
-	code uint32
-	err  error
-}
-
-func inheritStandardHandles() error {
-	for _, file := range []*os.File{os.Stdin, os.Stdout, os.Stderr} {
-		if err := syswindows.SetHandleInformation(syswindows.Handle(file.Fd()), syswindows.HANDLE_FLAG_INHERIT, syswindows.HANDLE_FLAG_INHERIT); err != nil {
-			return err
-		}
+func deleteTask(ctx context.Context, taskName string) error {
+	cmd := exec.CommandContext(ctx, "schtasks.exe", "/Delete", "/TN", taskName, "/F")
+	if out, err := cmd.CombinedOutput(); err != nil && !strings.Contains(string(out), "cannot find") {
+		return fmt.Errorf("delete scheduled task: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-func createKillOnCloseJob() (syswindows.Handle, error) {
-	job, err := syswindows.CreateJobObject(nil, nil)
+func replayFile(path string, out *os.File) error {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		return 0, err
+		return err
 	}
-	var info syswindows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-	info.BasicLimitInformation.LimitFlags = syswindows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-	if _, err := syswindows.SetInformationJobObject(
-		job,
-		syswindows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)),
-		uint32(unsafe.Sizeof(info)),
-	); err != nil {
-		_ = syswindows.CloseHandle(job)
-		return 0, err
+	data = decodeTaskOutput(data)
+	if len(data) == 0 {
+		return nil
 	}
-	return job, nil
+	_, err = out.Write(data)
+	return err
 }
 
-func logonUser(user string, domain string, password string) (syswindows.Token, error) {
-	user16, err := syswindows.UTF16PtrFromString(user)
-	if err != nil {
-		return 0, err
+func decodeTaskOutput(data []byte) []byte {
+	if len(data) < 2 {
+		return data
 	}
-	domain16, err := syswindows.UTF16PtrFromString(domain)
-	if err != nil {
-		return 0, err
+	if data[0] == 0xff && data[1] == 0xfe {
+		return utf16BytesToUTF8(data[2:], binary.LittleEndian)
 	}
-	password16, err := syswindows.UTF16PtrFromString(password)
-	if err != nil {
-		return 0, err
+	if data[0] == 0xfe && data[1] == 0xff {
+		return utf16BytesToUTF8(data[2:], binary.BigEndian)
 	}
-	var token syswindows.Token
-	r1, _, callErr := procLogonUserW.Call(
-		uintptr(unsafe.Pointer(user16)),
-		uintptr(unsafe.Pointer(domain16)),
-		uintptr(unsafe.Pointer(password16)),
-		uintptr(logon32LogonInteractive),
-		uintptr(logon32ProviderDefault),
-		uintptr(unsafe.Pointer(&token)),
-	)
-	if r1 == 0 {
-		return 0, callErr
+	if looksUTF16LE(data) {
+		return utf16BytesToUTF8(data, binary.LittleEndian)
 	}
-	return token, nil
+	return data
 }
 
-func environmentBlock(token syswindows.Token) ([]uint16, error) {
-	tokenEnv, err := token.Environ(false)
-	if err != nil {
-		return nil, err
+func looksUTF16LE(data []byte) bool {
+	if len(data) < 4 {
+		return false
 	}
-	values := map[string]string{}
-	for _, item := range tokenEnv {
-		key, value, ok := strings.Cut(item, "=")
-		if !ok {
-			continue
+	zeros := 0
+	pairs := len(data) / 2
+	for i := 1; i < len(data); i += 2 {
+		if data[i] == 0 {
+			zeros++
 		}
-		values[key] = value
 	}
+	return zeros*2 >= pairs
+}
 
-	requestEnv, err := requestEnvironment()
-	if err != nil {
-		return nil, err
+func utf16BytesToUTF8(data []byte, order binary.ByteOrder) []byte {
+	if len(data)%2 == 1 {
+		data = data[:len(data)-1]
 	}
-	for key, value := range requestEnv {
-		values[key] = value
+	words := make([]uint16, 0, len(data)/2)
+	for i := 0; i < len(data); i += 2 {
+		words = append(words, order.Uint16(data[i:i+2]))
 	}
+	return []byte(string(utf16.Decode(words)))
+}
 
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
+func randomID() (string, error) {
+	buf := make([]byte, 6)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
 	}
-	slices.SortFunc(keys, func(a, b string) int {
-		return strings.Compare(strings.ToUpper(a), strings.ToUpper(b))
-	})
-	var builder strings.Builder
-	for _, key := range keys {
-		builder.WriteString(key)
-		builder.WriteByte('=')
-		builder.WriteString(values[key])
-		builder.WriteByte(0)
+	return hex.EncodeToString(buf), nil
+}
+
+func powerShellString(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func validEnvKey(key string) bool {
+	if key == "" {
+		return false
 	}
-	builder.WriteByte(0)
-	return utf16.Encode([]rune(builder.String())), nil
+	for _, r := range key {
+		if !(r == '_' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
+			return false
+		}
+	}
+	return true
 }
 
 func requestEnvironment() (map[string]string, error) {
