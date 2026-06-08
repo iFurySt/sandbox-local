@@ -1,18 +1,19 @@
-# CI/CD 说明
+# CI 说明
 
-这个模板自带一套不依赖具体语言栈的 CI/CD 骨架。
+这个仓库当前只保留基础 CI，不再维护占位 release、部署或供应链扫描流水线。
 
 ## 默认包含的内容
 
-- `ci.yml`：仓库级检查，覆盖 docs、repo hygiene、Markdown 和 shell 脚本校验。
-- `supply-chain-security.yml`：在 PR 上做依赖变更检查，并在 PR、定时任务和手动触发时运行 OSV 扫描。
-- `release.yml`：手动触发的 release 流水线，用来打包仓库级制品、生成 provenance，并创建 GitHub Release。
+- `ci.yml`：仓库级检查，覆盖 docs、repo hygiene、GitHub Action pinning、shell 脚本语法、Go 单元测试和 Markdown lint。
+- `scripts/ci.sh`：本地和 GitHub Actions 共用的验证入口。
+- `scripts/check-repo-hygiene.sh`：检查仓库协作所需的基础文件是否还在。
+- `scripts/check-action-pinning.sh`：检查 workflow 里的 `uses:` 是否固定到不可变 commit SHA。
 
 ## 设计原则
 
-这套默认流水线的目标，是在项目真正成形前先把交付链路搭起来，而不是假装已经知道未来项目该怎么 build 和 deploy。
+当前目标是守住仓库可读性和基础可验证性。没有真实发布需求前，不保留会误导 Agent 或评审者的占位 CD 流程。
 
-当新项目的技术栈确定后，你应该把 `scripts/release-package.sh` 里的占位打包逻辑替换成真实构建产物，而不是另起一套平行流程。
+如果后续要重新接入 release 或部署流程，先明确产物、触发条件、权限和验收方式，再新增 workflow 和脚本。
 
 所有 GitHub Actions 都已经 pin 到 commit SHA。后续升级 action 时，也要继续保持这个约束。
 
@@ -20,22 +21,6 @@
 
 1. 保留 `ci.yml`，作为唯一默认常驻的仓库基础门禁。
 2. 在 `scripts/ci.sh` 里继续叠加项目自己的验证命令；当前 Go 项目会在存在 `go.mod` 时运行 `go test ./...`。
-3. 用真实构建产物替换 `scripts/release-package.sh`。
-4. 技术栈和环境稳定后，再补具体的部署 job。
-5. 即使交付方式变化，SBOM 和 provenance 这类供应链能力也建议保留。
-
-## 默认 release 产物
-
-当前 release 流水线会产出真实 CLI 二进制归档：
-
-- `release-manifest.json`
-- `sandbox-local_<version>_darwin_arm64.tar.gz`
-- `sandbox-local_<version>_darwin_amd64.tar.gz`
-- `sandbox-local_<version>_linux_arm64.tar.gz`
-- `sandbox-local_<version>_linux_amd64.tar.gz`
-- `sandbox-local_<version>_windows_arm64.tar.gz`
-- `sandbox-local_<version>_windows_amd64.tar.gz`
-- `sbom.spdx.json`
-- 对 release artifact 生成的 GitHub artifact attestation
-
-每个归档包含 `sandbox-local` 可执行文件、`LICENSE`、`README.md` 和默认 policy 示例。
+3. 需要跨平台 E2E 时，先确认 runner 能力和 skip/fail 策略，再放进 CI 矩阵。
+4. 需要 release 时，新建明确产物目录、manifest、签名或 provenance 约定。
+5. 需要供应链扫描时，选择能在当前仓库权限和依赖形态下稳定运行的工具。

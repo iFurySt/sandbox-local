@@ -52,7 +52,7 @@
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   └── design-docs/
-└── scripts/                       # CI、release、代码生成和本地验证脚本
+└── scripts/                       # CI、代码生成和本地验证脚本
 ```
 
 ## 依赖方向
@@ -309,7 +309,7 @@ profiles:
 2. 落 macOS Seatbelt 后端，支持文件策略和 offline / allowlist 网络代理。
 3. 落 Linux bubblewrap 后端，先支持 filesystem 与 offline，再补 managed proxy 与 seccomp。
 4. 稳定 Windows 后端，补 setup helper、ACL/firewall 回归和 allowlist。
-5. 补 release 矩阵、SBOM、provenance、安装脚本和跨平台 E2E。
+5. 在明确发布需求后补 release 矩阵、SBOM、provenance、安装脚本和跨平台 E2E。
 
 ## 关键风险
 

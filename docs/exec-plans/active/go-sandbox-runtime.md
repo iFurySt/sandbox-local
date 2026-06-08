@@ -11,7 +11,7 @@
   - OS-neutral policy、capability report、execution plan、result/error 模型。
   - macOS Seatbelt、Linux bubblewrap、Windows local-user/ACL/firewall 后端的分阶段实现。
   - CLI `run`、`doctor`、`setup`、`policy`、`debug plan`。
-  - 跨平台测试、release、SBOM、provenance 接入。
+  - 跨平台测试；release、SBOM、provenance 仅在明确发布需求后重新接入。
 - 不包含：
   - Docker 作为默认 sandbox 实现。
   - 与具体上层产品权限系统深度耦合。
@@ -50,7 +50,7 @@
 2. 实现 macOS Seatbelt 后端，覆盖 filesystem、offline network、allowlist proxy。
 3. 实现 Linux bubblewrap 后端，覆盖 filesystem、offline/open network、managed proxy bridge 与 seccomp 绕过阻断。
 4. 实现 Windows local-user 后端，覆盖 ACL、firewall、scheduled task runner、显式 setup 和 allowlist proxy。
-5. 补齐三平台 CI、release artifact、SBOM、provenance 和 E2E。
+5. 补齐三平台 CI 和 E2E；明确发布需求后再补 release artifact、SBOM 和 provenance。
 
 ## 验证方式
 
@@ -114,9 +114,9 @@
   - macOS：`make ci`、`./scripts/e2e-sdk.sh`、`go test -tags integration ./tests/e2e` 通过。SDK integration 构建 helper binary 后验证 cwd 写 allow、`.git` 写 deny、`secret.txt` 读 deny、默认 offline 阻断、allowlist 允许 `example.com`、拒绝 `openai.com`、`curl --noproxy '*'` 直连绕过被阻断。
   - Linux：`orb -m sandbox-local-linux go test ./...`、`orb -m sandbox-local-linux go test -tags integration ./tests/e2e` 通过。修正 SDK 场景下 Linux allowlist helper 不能假设 `os.Executable()` 是 CLI 的问题，并让 seccomp exec wrapper 对命令名执行 PATH lookup。
   - Windows：重启后 SSH 恢复，清理旧 `sbx*` profile；`go test ./...`、`go build -o bin\sandbox-local.exe .\cmd\sandbox-local`、`bin\sandbox-local.exe setup windows`、`go test -tags integration ./tests/e2e` 通过。额外手工验证 `doctor` 暴露 `offline, allowlist, open`，allowlist 允许 `example.com`，非 allowlisted `openai.com` 返回 proxy 403，`--noproxy` 直连返回连接失败；cleanup 后无 `sandbox-local-*` scheduled task/firewall，`sandboxlocal` 保持 disabled。
-- 2026-04-21 release：
-  - `VERSION=0.1.0-test ./scripts/release-package.sh`
-  - `jq . dist/release-manifest.json`
+- 2026-06-08 CI/CD 收口：
+  - 移除未使用且配置不一致的 release workflow、供应链 workflow 和 `scripts/release-package.sh`。
+  - `make ci`
 
 ## 进度记录
 
@@ -139,13 +139,13 @@
 - [x] 2026-04-22：新增 `tests/e2e` SDK integration 和 `scripts/e2e-sdk.{sh,ps1}`，三端通过同一 SDK 调用链路验证文件和网络隔离。
 - [x] 2026-04-22：补 helper binary resolution，SDK 上层应用可通过 `Options.HelperPath` / `SANDBOX_LOCAL_HELPER` 指向 `sandbox-local` helper，避免 Linux bridge / Windows runner 误执行业务进程。
 - [x] 2026-04-21：完成三平台基础验证。macOS/Linux 跑真实 sandbox CLI；Windows 跑 `go test ./...`、build、doctor、policy 和 noop run。
-- [x] 2026-04-21：完成 release 接入，把 `scripts/release-package.sh` 从模板元数据包替换为真实二进制产物。
+- [x] 2026-06-08：清理无用 CI/CD；当前只保留基础 CI，release、SBOM 和 provenance 等明确发布需求后再接入。
 
 ## 后续增强
 
 - [ ] 把 `go test -tags integration ./tests/e2e` 接入真实三平台 CI runner；Windows runner 需要管理员权限和可用 Task Scheduler/Firewall。
 - [ ] 继续补 junction、glob、IP canonicalization、localhost/loopback 细分策略的安全回归；如需要隔离 Windows loopback 本地服务，再评估 WFP filter。
-- [ ] 补 SBOM/provenance 和安装脚本，把 helper binary 分发约定写入 release 文档。
+- [ ] 明确 release 产物和分发方式后，补 SBOM/provenance、安装脚本和 helper binary 分发约定。
 
 ## 决策记录
 

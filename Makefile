@@ -1,7 +1,7 @@
 PROJECT ?=
 SLUG ?=
 
-.PHONY: init check-docs check-repo ci release-package new-history new-plan
+.PHONY: init check-docs check-repo ci new-history new-plan
 
 init:
 	@if [ -z "$(PROJECT)" ]; then echo "用法: make init PROJECT=项目名"; exit 1; fi
@@ -16,9 +16,6 @@ check-repo:
 
 ci:
 	./scripts/ci.sh
-
-release-package:
-	./scripts/release-package.sh
 
 new-history:
 	@if [ -z "$(SLUG)" ]; then echo "用法: make new-history SLUG=变更名"; exit 1; fi
