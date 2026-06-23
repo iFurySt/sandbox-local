@@ -1,0 +1,4 @@
+github.com/iFurySt/sandbox-local v0.0.0-20260623084258-d74c41ac0f1b h1:Lul41oYh9gXwyJNBFJwggfaYsJiAzoHwogsxdoeU/+w=
+github.com/iFurySt/sandbox-local v0.0.0-20260623084258-d74c41ac0f1b/go.mod h1:rD4HWLqZ9PUR7PbDkdCc6IMFzYE5giXip6sWLMimwMQ=
+golang.org/x/sys v0.35.0 h1:vz1N37gP5bs89s7He8XuIYXpyY0+QlsKmzipCbUtyxI=
+golang.org/x/sys v0.35.0/go.mod h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=
