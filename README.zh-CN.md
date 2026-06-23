@@ -78,11 +78,24 @@ Windows 先准备宿主机能力：
 
 ## Go SDK
 
-最小调用形态：
+安装模块：
+
+```bash
+go get github.com/iFurySt/sandbox-local
+```
+
+上层应用的最小调用形态：
 
 ```go
+func main() {
+    if sandbox.MaybeRunHelper() {
+        return
+    }
+    // 继续执行上层应用逻辑。
+}
+
 manager, err := sandbox.NewManager(sandbox.Options{
-    HelperPath: "./bin/sandbox-local",
+    HelperPath: os.Args[0],
 })
 if err != nil {
     return err
@@ -117,7 +130,10 @@ if err != nil {
 _ = result.ExitCode
 ```
 
-SDK 上层应用应设置 `Options.HelperPath` 或 `SANDBOX_LOCAL_HELPER`，指向 `sandbox-local` helper binary。这样 Linux bridge / Windows runner 不会把上层业务进程误当作内部 helper 重新执行。
+`sandbox.MaybeRunHelper()` 让上层应用自己的二进制也能作为 Linux bridge
+和 Windows runner 需要的 helper 进程。SDK 调用方应把 `Options.HelperPath`
+或 `SANDBOX_LOCAL_HELPER` 指向这个具备 helper dispatch 的二进制。可复制的
+独立示例见 `examples/quickstart`。
 
 ## 安全场景
 

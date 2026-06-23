@@ -65,6 +65,6 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 
 - 已实现 Go module、SDK facade、Cobra CLI、配置加载和基础单元测试。
 - 已实现 macOS Seatbelt 后端闭环：文件写 allow/deny、文件 read deny、network `offline` / `allowlist` / `open`。`allowlist` 通过 host-managed HTTP/HTTPS proxy 强制执行，Seatbelt 只放行该本地代理端口；文件路径会 canonicalize 现有 symlink 前缀。
-- 已实现 Linux bubblewrap 后端闭环：只读根、writable roots、deny remount/mask、network `offline` / `allowlist` / `open`。`allowlist` 使用 `--unshare-net`、sandbox 内 loopback bridge、host Unix socket proxy 和 seccomp exec wrapper，阻断直接 AF_UNIX/socketpair 绕过；SDK 场景通过 `Options.HelperPath` 或 `SANDBOX_LOCAL_HELPER` 指向 helper binary。
+- 已实现 Linux bubblewrap 后端闭环：只读根、writable roots、deny remount/mask、network `offline` / `allowlist` / `open`。`allowlist` 使用 `--unshare-net`、sandbox 内 loopback bridge、host Unix socket proxy 和 seccomp exec wrapper，阻断直接 AF_UNIX/socketpair 绕过；SDK 场景通过 `sandbox.MaybeRunHelper()` 让上层应用二进制承接 internal helper dispatch，并通过 `Options.HelperPath` 或 `SANDBOX_LOCAL_HELPER` 指向该 helper-capable binary。
 - 已实现 Windows local-user 后端闭环：持久禁用账户 `sandboxlocal`、`setup windows`、ACL read/write allow/deny、一次性 scheduled task runner、network `offline` / `allowlist` / `open`。UTM Windows arm64 上已验证 SDK E2E、CLI allowlist 允许/拒绝、`--noproxy` 直连绕过阻断和 cleanup；`doctor` 会提示 Windows allowlist 依赖 host proxy 与 per-user firewall，loopback 会保留给 managed proxy。
 - 仓库当前只保留基础 CI；release、SBOM 和 provenance 流水线已收口为后续明确发布需求后再接入。

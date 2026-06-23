@@ -114,7 +114,7 @@ func (m *Manager) Close() error
 - `Prepare` 返回脱敏后的执行计划，供 CLI `debug plan` 和客户端诊断使用。
 - `Check` 返回当前平台能力、缺失依赖和可用后端。
 - `Setup` 做平台显式预检/预创建；当前 Windows 会创建/检查 `sandboxlocal`、batch logon right、Task Scheduler、Firewall 和 OpenSSH 状态。
-- `HelperPath` 供 SDK 上层应用指定随 SDK 分发或安装在 PATH 中的 `sandbox-local` helper；CLI 自身默认用当前 binary。Linux allowlist bridge 和 Windows scheduled-task runner 都通过该 helper 进入 internal 命令，避免误重启上层应用进程。
+- `sandbox.MaybeRunHelper()` 供 SDK 上层应用在 `main()` 顶部承接 internal helper dispatch；`HelperPath` 供 SDK 上层应用指定具备 helper dispatch 的自身二进制、随 SDK 分发的 helper，或安装在 PATH 中的 `sandbox-local` helper。CLI 自身默认用当前 binary。Linux allowlist bridge 和 Windows scheduled-task runner 都通过该 helper 进入 internal 命令，避免误重启上层应用进程。
 - `EnforcementMode` 至少包含 `Require` 与 `BestEffort`。默认推荐 `Require`，避免“以为被隔离，实际没隔离”。
 
 ## 策略模型

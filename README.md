@@ -78,11 +78,24 @@ Prepare Windows host requirements:
 
 ## Go SDK
 
-Minimal usage:
+Install the module:
+
+```bash
+go get github.com/iFurySt/sandbox-local
+```
+
+Minimal usage from an upper application:
 
 ```go
+func main() {
+    if sandbox.MaybeRunHelper() {
+        return
+    }
+    // Continue with the upper application.
+}
+
 manager, err := sandbox.NewManager(sandbox.Options{
-    HelperPath: "./bin/sandbox-local",
+    HelperPath: os.Args[0],
 })
 if err != nil {
     return err
@@ -117,7 +130,10 @@ if err != nil {
 _ = result.ExitCode
 ```
 
-SDK callers should set `Options.HelperPath` or `SANDBOX_LOCAL_HELPER` to the `sandbox-local` helper binary. This prevents the Linux bridge or Windows runner from re-executing the upper application binary as an internal helper.
+`sandbox.MaybeRunHelper()` lets the upper application binary serve as the helper
+process used by the Linux bridge and Windows runner. SDK callers should set
+`Options.HelperPath` or `SANDBOX_LOCAL_HELPER` to that helper-capable binary. A
+standalone example is available in `examples/quickstart`.
 
 ## Security Scenarios
 
