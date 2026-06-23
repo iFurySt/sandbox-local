@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/iFurySt/sandbox-local/internal/helperprotocol"
 	"golang.org/x/sys/unix"
 )
 
@@ -53,7 +54,7 @@ func Run(ctx context.Context, listenAddr string, unixSocket string, command []st
 	if err != nil {
 		return err
 	}
-	args := append([]string{"__exec-seccomp", "--"}, command...)
+	args := helperprotocol.Wrap(helperprotocol.ExecSeccompCommand, append([]string{"--"}, command...)...)
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

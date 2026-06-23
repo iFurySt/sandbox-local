@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/iFurySt/sandbox-local/internal/config"
+	"github.com/iFurySt/sandbox-local/internal/helpercmd"
+	"github.com/iFurySt/sandbox-local/internal/helperprotocol"
 	"github.com/iFurySt/sandbox-local/internal/linuxbridge"
 	"github.com/iFurySt/sandbox-local/internal/model"
 	"github.com/iFurySt/sandbox-local/internal/winrunner"
@@ -63,10 +65,28 @@ func NewRootCommand(out io.Writer, errOut io.Writer) *cobra.Command {
 	cmd.AddCommand(newSetupCommand(opts))
 	cmd.AddCommand(newDebugCommand(opts))
 	cmd.AddCommand(newPolicyCommand(opts))
+	cmd.AddCommand(newSDKHelperCommand())
 	cmd.AddCommand(newProxyBridgeCommand())
 	cmd.AddCommand(newExecSeccompCommand())
 	cmd.AddCommand(newWindowsRunnerCommand())
 	cmd.AddCommand(newVersionCommand(opts))
+	return cmd
+}
+
+func newSDKHelperCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    helperprotocol.DispatchCommand + " <internal-command> [flags]",
+		Hidden: true,
+		Args:   cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			code := helpercmd.Run(cmd.Context(), args, os.Stderr)
+			if code != 0 {
+				return ExitCodeError{Code: code}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().SetInterspersed(false)
 	return cmd
 }
 

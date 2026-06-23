@@ -21,6 +21,7 @@ import (
 
 	"github.com/iFurySt/sandbox-local/internal/fsx"
 	"github.com/iFurySt/sandbox-local/internal/helper"
+	"github.com/iFurySt/sandbox-local/internal/helperprotocol"
 	"github.com/iFurySt/sandbox-local/internal/model"
 	syswindows "golang.org/x/sys/windows"
 )
@@ -219,7 +220,7 @@ func (b Backend) Prepare(ctx context.Context, req model.Request) (model.Prepared
 	env[envWindowsPassword] = state.password
 	env[envWindowsDomain] = "."
 	env[envWindowsRequest] = string(requestEnv)
-	command := []string{exe, "__windows-runner", "--"}
+	command := []string{exe, helperprotocol.DispatchCommand, helperprotocol.WindowsRunnerCommand, "--"}
 	command = append(command, req.Command...)
 	return model.PreparedCommand{
 		Backend:  b.Name(),

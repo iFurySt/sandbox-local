@@ -8,6 +8,7 @@ import (
 
 	"github.com/iFurySt/sandbox-local/internal/fsx"
 	"github.com/iFurySt/sandbox-local/internal/helper"
+	"github.com/iFurySt/sandbox-local/internal/helperprotocol"
 	"github.com/iFurySt/sandbox-local/internal/model"
 )
 
@@ -131,7 +132,8 @@ func buildArgs(policy model.Policy, cwd string, command []string, managedProxyPo
 		}
 		command = append([]string{
 			resolvedHelper,
-			"__proxy-bridge",
+			helperprotocol.DispatchCommand,
+			helperprotocol.ProxyBridgeCommand,
 			"--listen", fmt.Sprintf("127.0.0.1:%d", managedProxyPort),
 			"--unix", managedProxySocket,
 			"--",
