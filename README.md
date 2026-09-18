@@ -17,7 +17,7 @@ By default, `sandbox-local` wraps OS-native isolation instead of using Docker as
 | --- | --- | --- |
 | macOS | Seatbelt / `sandbox-exec` | filesystem read/write policy, `offline` / `allowlist` / `open` networking |
 | Linux | bubblewrap, namespaces, seccomp bridge | filesystem policy, network namespace, allowlist proxy, direct socket bypass blocking |
-| Windows | disabled local user, ACL, Scheduled Task runner, Firewall | filesystem ACL policy, `setup windows`, `offline` / `allowlist` / `open` networking, cleanup |
+| Windows | disabled local runner, per-run capability SID, restricted token, ACL, Scheduled Task runner, Firewall | write allow-list enforcement, `setup windows`, `offline` / `allowlist` / `open` networking, cleanup |
 
 ## Quick Start
 
@@ -135,6 +135,14 @@ process used by the Linux bridge and Windows runner. SDK callers should set
 `Options.HelperPath` or `SANDBOX_LOCAL_HELPER` to that helper-capable binary. A
 standalone example is available in `examples/quickstart`.
 
+On Windows, `setup windows` provisions the disabled `sandboxlocal` runner
+account. Each `Run` resets and temporarily enables that account, creates a fresh
+capability SID, and launches the actual command with a `WRITE_RESTRICTED` token
+whose restricting-SID set contains that capability plus the runner account,
+current logon SID, and Everyone needed by ordinary Windows runtime objects.
+The built-in Users group remains excluded. Cleanup restores ACLs, removes
+the scheduled task and firewall rule, and disables the account again.
+
 ## Security Scenarios
 
 Concrete safety cases are documented in:
@@ -151,7 +159,7 @@ It contains macOS, Linux, and Windows sections for:
 - allowlist allow/deny domains
 - `curl --noproxy '*'` direct bypass blocking
 - Linux AF_UNIX/socket bypass regression
-- Windows scheduled task, firewall rule, and `sandboxlocal` cleanup
+- Windows runner account, scheduled task, firewall rule, and ACL cleanup
 
 ## Testing
 

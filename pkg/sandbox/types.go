@@ -125,7 +125,7 @@ func (m *Manager) Prepare(ctx context.Context, req Request) (*Plan, error) {
 func (m *Manager) Check(ctx context.Context) (*CapabilityReport, error) {
 	report, err := m.inner.Check(ctx)
 	if err != nil {
-		return nil, err
+		return &report, err
 	}
 	return &report, nil
 }

@@ -386,7 +386,7 @@ E2E 断言：这是 Linux 特有的 seccomp/bridge 绕过回归。
 
 ## Windows
 
-Windows 后端使用持久但默认禁用的本地用户 `sandboxlocal`、文件 ACL/DACL、一次性 Scheduled Task runner 和 per-user Firewall。`allowlist` 通过 host-managed HTTP/HTTPS proxy 执行域名允许/拒绝，并用 per-user outbound firewall 阻断直连绕过。loopback 当前保留给 managed proxy。
+Windows 使用持久但默认禁用的 `sandboxlocal` runner；每次真实 `Run` 重置密码并临时启用该账户，同时生成随机 capability SID。实际命令使用包含 capability SID、runner account SID、本次 logon SID 与 Everyone 的 `WRITE_RESTRICTED` token；这些 SID 分别覆盖 allow-list、profile/session 和普通 runtime objects，集合明确排除内置 Users 组。进程通过一次性 Scheduled Task 启动，`allowlist` 由 host-managed HTTP/HTTPS proxy 和 per-user firewall 共同强制；loopback 当前保留给 managed proxy。
 
 ### Windows 准备
 
@@ -456,11 +456,11 @@ if ((Get-Content (Join-Path $WorkDir "allowed.txt")).Trim() -ne "ok") {
 - `run` 退出码为 `0`。
 - `$WorkDir\allowed.txt` 存在且内容是 `ok`。
 
-E2E 断言：产物由 `sandboxlocal` 运行的任务创建。
+E2E 断言：产物由 `sandboxlocal` runner 内使用本次 capability SID 的受限命令创建。
 
 ### Windows-04：拒绝写入 `.git`
 
-目标：ACL/DACL 阻止 sandbox identity 写入仓库元数据。
+目标：账户 ACL 与 restricted-token capability SID 的双重检查阻止 sandbox identity 写入仓库元数据。
 
 ```powershell
 .\bin\sandbox-local.exe run `
@@ -492,7 +492,7 @@ E2E 断言：同时验证退出码和 host 文件系统副作用。
   --cwd $WorkDir `
   --network open `
   --deny-read secret.txt `
-  -- cmd.exe /c "type secret.txt >NUL"
+  -- cmd.exe /c "type secret.txt"
 
 if ($LASTEXITCODE -eq 0) {
   throw "unexpected success"
@@ -508,7 +508,7 @@ E2E 断言：deny-read 不能因为文件位于工作目录而被 write/read all
 
 ### Windows-06：默认 offline 阻断外部网络
 
-目标：默认策略下阻止 `sandboxlocal` 出站访问公网。
+目标：默认策略下阻止 `sandboxlocal` runner 出站访问公网。
 
 ```powershell
 .\bin\sandbox-local.exe run `
@@ -585,7 +585,7 @@ E2E 断言：这个 case 证明 per-user firewall 阻断了绕过 proxy 的外�
 
 ### Windows-09：运行后 cleanup 无残留
 
-目标：每次 run 后不留下 scheduled task、防火墙规则或启用的 sandbox 账户。
+目标：每次 run 后不留下 scheduled task、防火墙规则或 ACL 变更，并让 runner 账户恢复 disabled。
 
 ```powershell
 $Tasks = Get-ScheduledTask | Where-Object { $_.TaskName -like "sandbox-local-*" }
@@ -624,7 +624,7 @@ E2E 断言：cleanup 失败应被视为安全失败，而不是测试警告。
 | allowlist 拒绝未列入域名 | 是 | 是 | 是 |
 | `--noproxy` 直连绕过阻断 | 是 | 是 | 是 |
 | socket 绕过专项回归 | 不适用 | AF_UNIX/socketpair | 不适用 |
-| Windows identity / task / firewall cleanup | 不适用 | 不适用 | 是 |
+| Windows runner / ACL / task / firewall cleanup | 不适用 | 不适用 | 是 |
 
 ## 可演化为 E2E 的最小集合
 
@@ -638,7 +638,7 @@ E2E 断言：cleanup 失败应被视为安全失败，而不是测试警告。
 6. allowlist 允许 `example.com`。
 7. allowlist 拒绝 `openai.com`。
 8. allowlist 下 `curl --noproxy '*' https://example.com` 失败。
-9. Windows cleanup 检查 scheduled task、firewall rule、`sandboxlocal.Enabled`。
+9. Windows cleanup 检查 scheduled task、firewall rule、ACL 恢复和 `sandboxlocal.Enabled`。
 10. Linux AF_UNIX/socketpair 绕过检查。
 
 这些 case 的 SDK 形态应该使用同一个上层调用链路：上层应用构建或发现 `sandbox-local` helper binary，通过 `sandbox.NewManager(sandbox.Options{HelperPath: helperPath})` 创建 manager，先 `Setup`，再 `Run`。

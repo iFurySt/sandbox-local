@@ -4,8 +4,23 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"strings"
 	"testing"
 )
+
+func TestManagerCheckPropagatesBackendSelectionError(t *testing.T) {
+	manager, err := NewManager(Options{BackendPreference: BackendPreference("invalid")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := manager.Check(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "unsupported backend preference") {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if report == nil {
+		t.Fatal("Check() report is nil; capability details must survive selection errors")
+	}
+}
 
 func TestNoopManagerRun(t *testing.T) {
 	exe, err := os.Executable()

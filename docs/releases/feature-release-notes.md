@@ -16,3 +16,9 @@
 | 日期 | 功能域 | 用户价值 | 变更摘要 |
 | --- | --- | --- | --- |
 | 2026-06-23 | sandbox runtime SDK | Go 使用方可以直接 import SDK，并用自己的应用二进制承接 sandbox helper 模式。 | 新增 `sandbox.MaybeRunHelper` / `RunHelper`、统一 `__sandbox-local-helper` 内部协议、保留 CLI hidden helper commands，并新增可复制的 `examples/quickstart` 独立 Go module。 |
+
+## 2026-09
+
+| 日期 | 功能域 | 用户价值 | 变更摘要 |
+| --- | --- | --- | --- |
+| 2026-09-18 | Windows sandbox | Windows 的 workspace 写权限成为严格 allow-list，并且取消或失败后仍执行完整 cleanup。 | 每次 `Run` 使用随机 capability SID 与 capability + runner + logon + Everyone restricting SIDs 的 `WRITE_RESTRICTED` token，并排除内置 Users 组；修正 write deny mask 避免阻断只读访问；cleanup 改用 detached context；capability 检查保留底层错误。 |

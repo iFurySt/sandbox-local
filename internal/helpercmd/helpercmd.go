@@ -41,6 +41,8 @@ func run(ctx context.Context, args []string) error {
 		return linuxbridge.ExecWithSeccomp(stripSeparator(rest))
 	case helperprotocol.WindowsRunnerCommand:
 		return winrunner.Run(ctx, stripSeparator(rest))
+	case helperprotocol.WindowsRestrictedRunnerCommand:
+		return winrunner.RunRestricted(ctx, stripSeparator(rest))
 	default:
 		return fmt.Errorf("unknown sandbox-local helper command %q", command)
 	}

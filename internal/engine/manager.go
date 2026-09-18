@@ -31,7 +31,7 @@ func NewManager(opts model.Options) *Manager {
 func (m *Manager) Check(ctx context.Context) (model.CapabilityReport, error) {
 	_, report, err := backend.Select(ctx, m.opts.BackendPreference, m.opts.Enforcement)
 	if err != nil {
-		return report, nil
+		return report, err
 	}
 	return report, nil
 }
@@ -156,11 +156,11 @@ func (m *Manager) Run(ctx context.Context, req model.Request) (model.Result, err
 		return model.Result{}, err
 	}
 	if networkCleanup != nil {
-		defer networkCleanup(context.Background())
+		defer networkCleanup(context.WithoutCancel(ctx))
 	}
 	prepared, backendCleanup, err := selected.Prepare(runCtx, req)
 	if backendCleanup != nil {
-		defer backendCleanup(context.Background())
+		defer backendCleanup(context.WithoutCancel(ctx))
 	}
 	if err != nil {
 		return model.Result{}, err

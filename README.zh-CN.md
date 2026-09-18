@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | macOS | Seatbelt / `sandbox-exec` | 文件读写策略，`offline` / `allowlist` / `open` 网络 |
 | Linux | bubblewrap、namespaces、seccomp bridge | 文件策略、network namespace、allowlist proxy、直连 socket 绕过阻断 |
-| Windows | disabled local user、ACL、Scheduled Task runner、Firewall | 文件 ACL 策略、`setup windows`、`offline` / `allowlist` / `open` 网络、cleanup |
+| Windows | 禁用的本地 runner、每次运行 capability SID、受限 token、ACL、Scheduled Task runner、Firewall | 写入 allow-list 强制执行、`setup windows`、`offline` / `allowlist` / `open` 网络、cleanup |
 
 ## 快速开始
 
@@ -135,6 +135,13 @@ _ = result.ExitCode
 或 `SANDBOX_LOCAL_HELPER` 指向这个具备 helper dispatch 的二进制。可复制的
 独立示例见 `examples/quickstart`。
 
+Windows 下，`setup windows` 会准备默认禁用的 `sandboxlocal` runner 账户。每次
+`Run` 重置密码并临时启用该账户，同时创建随机 capability SID；真实命令使用
+restricting-SID 集合中包含该 capability、runner 账户、本次 logon SID 和 Everyone 的
+`WRITE_RESTRICTED` token，以满足 Windows 常规运行时对象；内置 Users 组仍明确
+排除。cleanup 会恢复 ACL、删除 scheduled task 和防火墙
+规则，并再次禁用 runner 账户。
+
 ## 安全场景
 
 实际能覆盖的安全 case 见：
@@ -151,7 +158,7 @@ _ = result.ExitCode
 - allowlist 允许/拒绝域名
 - `curl --noproxy '*'` 直连绕过阻断
 - Linux AF_UNIX/socket 绕过回归
-- Windows scheduled task、firewall rule、`sandboxlocal` cleanup
+- Windows runner 账户、scheduled task、firewall rule 和 ACL cleanup
 
 ## 测试
 

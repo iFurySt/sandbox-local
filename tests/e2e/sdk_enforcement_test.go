@@ -60,6 +60,27 @@ func TestSDKUpperAppFilesystemIsolation(t *testing.T) {
 		t.Fatalf("denied write created blocked file: %v", err)
 	}
 
+	if runtime.GOOS == "windows" {
+		outside := filepath.Join(filepath.Dir(workdir), "sandbox-local-outside-"+filepath.Base(workdir)+".txt")
+		t.Cleanup(func() { _ = os.Remove(outside) })
+		out.Reset()
+		result, err = manager.Run(ctx, sandbox.Request{
+			Command: []string{"cmd.exe", "/c", "echo bad>" + outside},
+			Cwd:     workdir,
+			Policy:  policy,
+			Stdio:   sandbox.Stdio{Stdout: &out, Stderr: &out},
+		})
+		if err != nil {
+			t.Fatalf("outside write returned runner error instead of process denial: %v\n%s", err, out.String())
+		}
+		if result.ExitCode == 0 {
+			t.Fatalf("write outside allow-list unexpectedly succeeded\n%s", out.String())
+		}
+		if _, err := os.Stat(outside); !os.IsNotExist(err) {
+			t.Fatalf("outside write created file: %v", err)
+		}
+	}
+
 	out.Reset()
 	result, err = manager.Run(ctx, sandbox.Request{
 		Command: readDeniedCommand(),
@@ -72,6 +93,39 @@ func TestSDKUpperAppFilesystemIsolation(t *testing.T) {
 	}
 	if result.ExitCode == 0 {
 		t.Fatalf("denied read unexpectedly succeeded\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "secret") {
+		t.Fatalf("denied read leaked protected content\n%s", out.String())
+	}
+}
+
+func TestWindowsRunCleanup(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows cleanup audit")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	workdir := prepareWorkspace(t)
+	helperPath := buildHelper(t, workdir)
+	manager := newReadyManager(t, ctx, helperPath)
+	result, err := manager.Run(ctx, sandbox.Request{
+		Command: []string{"cmd.exe", "/c", "exit 0"},
+		Cwd:     workdir,
+		Policy:  withNetwork(basePolicy(workdir), sandbox.NetworkOpen, nil),
+	})
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("Windows cleanup probe command failed: result=%+v err=%v", result, err)
+	}
+
+	script := `$users = @(Get-LocalUser | Where-Object Name -Like 'sbx-*'); ` +
+		`$tasks = @(Get-ScheduledTask | Where-Object TaskName -Like 'sandbox-local-*'); ` +
+		`$rules = @(Get-NetFirewallRule -DisplayName 'sandbox-local-*' -ErrorAction SilentlyContinue); ` +
+		`if ($users.Count -or $tasks.Count -or $rules.Count) { ` +
+		`throw "cleanup residue users=$($users.Count) tasks=$($tasks.Count) rules=$($rules.Count)" }`
+	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Windows cleanup audit failed: %v\n%s", err, output)
 	}
 }
 
@@ -251,7 +305,7 @@ func writeDeniedCommand() []string {
 
 func readDeniedCommand() []string {
 	if runtime.GOOS == "windows" {
-		return []string{"cmd.exe", "/c", "type secret.txt >NUL"}
+		return []string{"cmd.exe", "/c", "type secret.txt"}
 	}
 	return []string{"/bin/sh", "-c", "cat secret.txt >/dev/null"}
 }

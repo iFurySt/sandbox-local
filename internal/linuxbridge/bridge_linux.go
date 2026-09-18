@@ -19,6 +19,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Run bridges the loopback proxy inside a Linux bwrap sandbox to the managed
+// Unix-domain proxy outside it. It must only be invoked by the Linux backend's
+// bwrap command: the helper's seccomp filter blocks direct AF_UNIX sockets but
+// does not replace the backend's filesystem and network isolation.
 func Run(ctx context.Context, listenAddr string, unixSocket string, command []string) error {
 	if listenAddr == "" || unixSocket == "" {
 		return errors.New("listen address and unix socket are required")

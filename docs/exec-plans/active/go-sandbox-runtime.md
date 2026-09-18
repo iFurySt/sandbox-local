@@ -38,7 +38,7 @@
 - 风险：Linux 环境可能缺少 user namespace 或 bubblewrap。
   缓解方式：`doctor` 提前检测；后续评估 vendored helper。
 - 风险：Windows 强网络限制和 sandbox identity setup 需要高权限。
-  缓解方式：当前使用持久但默认禁用的 `sandboxlocal` 本地用户；`sandbox-local setup windows` 显式检查/创建账户、batch logon right、Task Scheduler、Firewall 和 OpenSSH 状态；运行时通过 per-user firewall 和 host proxy 实现 offline/allowlist。
+  缓解方式：`sandbox-local setup windows` 使用禁用的 `sandboxlocal` runner 显式检查本地账户、batch logon right、Task Scheduler、Firewall 和 OpenSSH 能力；实际运行使用随机 capability SID 与 capability + runner + logon + Everyone restricting SIDs，并排除内置 Users 组；通过 per-user firewall 和 host proxy 实现 offline/allowlist，并在结束后恢复 ACL、删除 task/firewall rule、禁用 runner。
 - 风险：Windows arm64/UTM 中备用凭据直启路径不稳定。
   缓解方式：已确认 `LogonUser/CreateProcessWithTokenW` 与 PowerShell `Start-Process -Credential` 会触发 `0xC0000142`；当前 Windows runner 改为一次性 Scheduled Task 路线，不再把直启路径作为闭环。
 - 风险：路径、symlink、junction、glob、IP canonicalization 可能造成绕过。
@@ -131,7 +131,7 @@
 - [x] 2026-04-21：完成 Linux 后端最小闭环：bubblewrap 文件写保护、offline/open 网络模式、CLI smoke。
 - [x] 2026-04-21：实现 host-managed HTTP/HTTPS allowlist proxy，并先接入 macOS 强 enforcement。
 - [x] 2026-04-21：实现 Linux allowlist 的 UDS proxy bridge 和 seccomp exec wrapper；验证允许域、拒绝域和 AF_UNIX socket 阻断。
-- [x] 2026-04-21：完成 Windows 后端最小闭环：临时本地用户、ACL read/write 策略、offline/open 网络模式；2026-04-22 已替换为持久 `sandboxlocal` + scheduled task runner。
+- [x] 2026-04-21：完成 Windows 后端最小闭环：临时本地用户、ACL read/write 策略、offline/open 网络模式；2026-04-22 替换为持久 `sandboxlocal` + scheduled task runner，2026-09-18 叠加每次运行独立 capability SID 与 restricted token。
 - [x] 2026-04-21：复验 Windows 临时用户/profile/firewall cleanup；确认 cleanup 正常。
 - [x] 2026-04-22：解决 UTM Windows arm64 中备用凭据启动 `cmd.exe` / `whoami.exe` / `powershell.exe` 返回 `0xC0000142` 的兼容性问题；Windows runner 改走一次性 Scheduled Task。
 - [x] 2026-04-22：补 `sandbox-local setup windows` 和 SDK `Manager.Setup`，显式检查 Windows sandbox identity 与系统能力。
@@ -140,6 +140,7 @@
 - [x] 2026-04-22：补 helper binary resolution，SDK 上层应用可通过 `Options.HelperPath` / `SANDBOX_LOCAL_HELPER` 指向 `sandbox-local` helper，避免 Linux bridge / Windows runner 误执行业务进程。
 - [x] 2026-04-21：完成三平台基础验证。macOS/Linux 跑真实 sandbox CLI；Windows 跑 `go test ./...`、build、doctor、policy 和 noop run。
 - [x] 2026-06-08：清理无用 CI/CD；当前只保留基础 CI，release、SBOM 和 provenance 等明确发布需求后再接入。
+- [x] 2026-09-18：Windows 每次运行使用随机 capability SID 和 capability + runner + logon + Everyone restricting SIDs 的 `WRITE_RESTRICTED` token，补齐严格 write allow-list、只读不受 write deny 误伤、取消后 cleanup 与 capability error 传播。
 
 ## 后续增强
 
@@ -160,3 +161,4 @@
 - 2026-04-22：Windows runner 改为持久禁用 `sandboxlocal` identity + 一次性 Scheduled Task；不再使用 `CreateProcessWithTokenW` 直启目标命令。该方案会保留一个 disabled 本地账户和 profile，换取稳定启动与避免 per-run profile 泄漏。
 - 2026-04-22：SDK 场景不再假设当前进程就是 CLI；Linux allowlist bridge 和 Windows runner 统一通过 helper binary resolution 进入 internal command。CLI 自身默认使用当前 binary，上层 SDK 应传 `Options.HelperPath` 或设置 `SANDBOX_LOCAL_HELPER`。
 - 2026-04-22：Windows allowlist 采用 host-managed proxy + per-user firewall，而不是静默代理环境变量。代理负责域名策略，firewall 阻断直连绕过；loopback 保留给 managed proxy，并在 `doctor` 中作为平台差异提示。
+- 2026-09-18：Windows 保留 `sandboxlocal` + 一次性 Scheduled Task 作为稳定登录入口，但真实命令由二级 helper 使用 `WRITE_RESTRICTED` token 启动；每次运行创建独立 capability SID，restricting-SID 集合再加入 runner account、本次 logon SID 与 Everyone 以满足 profile/session/普通 runtime objects，同时排除内置 Users 组。未采用每次运行新建账户，因为 Scheduled Task 会加载 profile，而 profile hive 无法保证在命令结束时即时卸载。

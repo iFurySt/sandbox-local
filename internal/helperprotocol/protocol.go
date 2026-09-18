@@ -1,10 +1,11 @@
 package helperprotocol
 
 const (
-	DispatchCommand      = "__sandbox-local-helper"
-	ProxyBridgeCommand   = "__proxy-bridge"
-	ExecSeccompCommand   = "__exec-seccomp"
-	WindowsRunnerCommand = "__windows-runner"
+	DispatchCommand                = "__sandbox-local-helper"
+	ProxyBridgeCommand             = "__proxy-bridge"
+	ExecSeccompCommand             = "__exec-seccomp"
+	WindowsRunnerCommand           = "__windows-runner"
+	WindowsRestrictedRunnerCommand = "__windows-restricted-runner"
 )
 
 func Wrap(command string, args ...string) []string {

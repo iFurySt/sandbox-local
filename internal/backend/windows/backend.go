@@ -4,8 +4,6 @@ package windows
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,9 +13,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"syscall"
-	"time"
-	"unsafe"
 
 	"github.com/iFurySt/sandbox-local/internal/fsx"
 	"github.com/iFurySt/sandbox-local/internal/helper"
@@ -29,10 +24,11 @@ import (
 const (
 	backendName = "windows-local-user"
 
-	envWindowsUser     = "SANDBOX_LOCAL_WINDOWS_USER"
-	envWindowsPassword = "SANDBOX_LOCAL_WINDOWS_PASSWORD"
-	envWindowsDomain   = "SANDBOX_LOCAL_WINDOWS_DOMAIN"
-	envWindowsRequest  = "SANDBOX_LOCAL_WINDOWS_REQUEST_ENV"
+	envWindowsUser               = "SANDBOX_LOCAL_WINDOWS_USER"
+	envWindowsPassword           = "SANDBOX_LOCAL_WINDOWS_PASSWORD"
+	envWindowsDomain             = "SANDBOX_LOCAL_WINDOWS_DOMAIN"
+	envWindowsRequest            = "SANDBOX_LOCAL_WINDOWS_REQUEST_ENV"
+	envWindowsWriteCapabilitySID = "SANDBOX_LOCAL_WINDOWS_WRITE_CAPABILITY_SID"
 
 	fileDeleteChild syswindows.ACCESS_MASK = 0x40
 
@@ -41,14 +37,6 @@ const (
 
 	seBatchLogonRight = "SeBatchLogonRight"
 	sandboxUsername   = "sandboxlocal"
-)
-
-var (
-	procLsaOpenPolicy          = syswindows.NewLazySystemDLL("advapi32.dll").NewProc("LsaOpenPolicy")
-	procLsaClose               = syswindows.NewLazySystemDLL("advapi32.dll").NewProc("LsaClose")
-	procLsaAddAccountRights    = syswindows.NewLazySystemDLL("advapi32.dll").NewProc("LsaAddAccountRights")
-	procLsaRemoveAccountRights = syswindows.NewLazySystemDLL("advapi32.dll").NewProc("LsaRemoveAccountRights")
-	procLsaNtStatusToWinError  = syswindows.NewLazySystemDLL("advapi32.dll").NewProc("LsaNtStatusToWinError")
 )
 
 type Backend struct{}
@@ -73,7 +61,7 @@ func (b Backend) Check(ctx context.Context) model.CapabilityReport {
 		Sandboxed:    true,
 		NetworkModes: []string{string(model.NetworkOffline), string(model.NetworkAllowlist), string(model.NetworkOpen)},
 		Warnings:     []string{"Windows network allowlist uses a host-managed proxy plus per-user outbound firewall blocking; loopback remains available for the managed proxy"},
-		Notes:        []string{"Windows enforcement uses a disabled local sandbox user, filesystem ACLs, one-shot scheduled tasks, and per-user outbound firewall rules"},
+		Notes:        []string{"Windows uses a disabled local runner account plus a fresh per-run capability SID, a write-restricted token, filesystem ACLs, a one-shot scheduled task, and per-user outbound firewall rules"},
 	}
 	for _, name := range []string{"net.exe", "powershell.exe", "schtasks.exe"} {
 		if _, err := exec.LookPath(name); err != nil {
@@ -207,12 +195,12 @@ func (b Backend) Prepare(ctx context.Context, req model.Request) (model.Prepared
 	}
 	exe, err := helper.Resolve(req.HelperPath)
 	if err != nil {
-		_ = state.Cleanup(context.Background())
+		_ = state.Cleanup(context.WithoutCancel(ctx))
 		return model.PreparedCommand{}, nil, err
 	}
 	requestEnv, err := json.Marshal(req.Env)
 	if err != nil {
-		_ = state.Cleanup(context.Background())
+		_ = state.Cleanup(context.WithoutCancel(ctx))
 		return model.PreparedCommand{}, nil, err
 	}
 	env := map[string]string{}
@@ -220,6 +208,7 @@ func (b Backend) Prepare(ctx context.Context, req model.Request) (model.Prepared
 	env[envWindowsPassword] = state.password
 	env[envWindowsDomain] = "."
 	env[envWindowsRequest] = string(requestEnv)
+	env[envWindowsWriteCapabilitySID] = state.writeCapabilitySID
 	command := []string{exe, helperprotocol.DispatchCommand, helperprotocol.WindowsRunnerCommand, "--"}
 	command = append(command, req.Command...)
 	return model.PreparedCommand{
@@ -233,14 +222,13 @@ func (b Backend) Prepare(ctx context.Context, req model.Request) (model.Prepared
 }
 
 type sandboxState struct {
-	username          string
-	password          string
-	sidString         string
-	ruleName          string
-	batchLogonGranted bool
-	persistentUser    bool
-	acls              []aclSnapshot
-	lock              syswindows.Handle
+	username           string
+	password           string
+	sidString          string
+	writeCapabilitySID string
+	ruleName           string
+	acls               []aclSnapshot
+	lock               syswindows.Handle
 }
 
 type aclSnapshot struct {
@@ -262,24 +250,27 @@ func setup(ctx context.Context, policy model.Policy, cwd string, managedProxyPor
 	cleanupOnError := true
 	defer func() {
 		if cleanupOnError {
-			_ = state.Cleanup(context.Background())
+			_ = state.Cleanup(context.WithoutCancel(ctx))
 		}
 	}()
 
 	if err := createLocalUser(ctx, username, password); err != nil {
 		return nil, nil, err
 	}
-	state.persistentUser = username == sandboxUsername
 	sid, sidString, err := lookupSID(username)
 	if err != nil {
 		return nil, nil, err
 	}
 	state.sidString = sidString
+	writeCapabilitySID, err := newCapabilitySID()
+	if err != nil {
+		return nil, nil, err
+	}
+	state.writeCapabilitySID = writeCapabilitySID.String()
 	if err := grantAccountRight(sid, seBatchLogonRight); err != nil {
 		return nil, nil, fmt.Errorf("grant batch logon right to sandbox Windows user: %w", err)
 	}
-	state.batchLogonGranted = true
-	warnings, err := applyFilesystemPolicy(policy.Filesystem, cwd, sid, state)
+	warnings, err := applyFilesystemPolicy(policy.Filesystem, cwd, sid, writeCapabilitySID, state)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -321,31 +312,9 @@ func (s *sandboxState) Cleanup(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	if s.batchLogonGranted && s.username != "" && !s.persistentUser {
-		if sid, _, err := lookupSID(s.username); err == nil {
-			if err := removeAccountRight(sid, seBatchLogonRight); err != nil {
-				errs = append(errs, err)
-			}
-		} else {
-			errs = append(errs, fmt.Errorf("lookup sandbox Windows user before removing batch logon right: %w", err))
-		}
-		s.batchLogonGranted = false
-	}
 	if s.username != "" {
-		if s.persistentUser {
-			if err := disableLocalUser(ctx, s.username); err != nil {
-				errs = append(errs, err)
-			}
-		} else {
-			if err := removeLocalUserProfile(ctx, s.username); err != nil {
-				errs = append(errs, err)
-			}
-			if err := deleteLocalUser(ctx, s.username); err != nil {
-				errs = append(errs, err)
-			}
-			if err := removeLocalUserProfile(ctx, s.username); err != nil {
-				errs = append(errs, err)
-			}
+		if err := disableLocalUser(ctx, s.username); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if s.lock != 0 {
@@ -385,7 +354,7 @@ func acquireSetupLock() (syswindows.Handle, error) {
 	return lock, nil
 }
 
-func applyFilesystemPolicy(policy model.FilesystemPolicy, cwd string, sid *syswindows.SID, state *sandboxState) ([]string, error) {
+func applyFilesystemPolicy(policy model.FilesystemPolicy, cwd string, sid, writeCapabilitySID *syswindows.SID, state *sandboxState) ([]string, error) {
 	plans, warnings, err := filesystemPlans(policy, cwd)
 	if err != nil {
 		return nil, err
@@ -404,21 +373,37 @@ func applyFilesystemPolicy(policy model.FilesystemPolicy, cwd string, sid *syswi
 		if info.IsDir() && plan.inherit {
 			inheritance = syswindows.OBJECT_INHERIT_ACE | syswindows.CONTAINER_INHERIT_ACE
 		}
-		entry := syswindows.EXPLICIT_ACCESS{
-			AccessPermissions: plan.mask,
-			AccessMode:        plan.mode,
-			Inheritance:       inheritance,
-			Trustee: syswindows.TRUSTEE{
-				TrusteeForm:  syswindows.TRUSTEE_IS_SID,
-				TrusteeType:  syswindows.TRUSTEE_IS_USER,
-				TrusteeValue: syswindows.TrusteeValueFromSID(sid),
-			},
-		}
-		if err := applyACL(plan.path, entry, state, snapshots); err != nil {
+		entries := aclEntries(plan, inheritance, sid, writeCapabilitySID)
+		if err := applyACL(plan.path, entries[0], state, snapshots); err != nil {
 			return nil, fmt.Errorf("apply %s ACL to %q: %w", plan.label, plan.path, err)
+		}
+		if len(entries) == 2 {
+			entry := entries[1]
+			if err := applyACL(plan.path, entry, state, snapshots); err != nil {
+				return nil, fmt.Errorf("apply %s capability ACL to %q: %w", plan.label, plan.path, err)
+			}
 		}
 	}
 	return warnings, nil
+}
+
+func aclEntries(plan aclPlan, inheritance uint32, sid, writeCapabilitySID *syswindows.SID) []syswindows.EXPLICIT_ACCESS {
+	entry := syswindows.EXPLICIT_ACCESS{
+		AccessPermissions: plan.mask,
+		AccessMode:        plan.mode,
+		Inheritance:       inheritance,
+		Trustee: syswindows.TRUSTEE{
+			TrusteeForm:  syswindows.TRUSTEE_IS_SID,
+			TrusteeType:  syswindows.TRUSTEE_IS_USER,
+			TrusteeValue: syswindows.TrusteeValueFromSID(sid),
+		},
+	}
+	entries := []syswindows.EXPLICIT_ACCESS{entry}
+	if plan.mode == syswindows.GRANT_ACCESS {
+		entry.Trustee.TrusteeValue = syswindows.TrusteeValueFromSID(writeCapabilitySID)
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 type aclPlan struct {
@@ -492,10 +477,24 @@ func filesystemPlans(policy model.FilesystemPolicy, cwd string) ([]aclPlan, []st
 	}
 	for _, path := range writeDeny {
 		plans = append(plans, aclPlan{
-			path:    path,
-			label:   "write deny",
-			mode:    syswindows.DENY_ACCESS,
-			mask:    syswindows.ACCESS_MASK(syswindows.FILE_GENERIC_WRITE) | syswindows.DELETE | fileDeleteChild | syswindows.WRITE_DAC | syswindows.WRITE_OWNER,
+			path:  path,
+			label: "write deny",
+			mode:  syswindows.DENY_ACCESS,
+			// Deny only data-mutation rights. FILE_GENERIC_WRITE must not be
+			// used here: its STANDARD_RIGHTS_WRITE component is READ_CONTROL,
+			// and the generic mapping also pulls in SYNCHRONIZE. A read-only
+			// open requests GENERIC_READ, which maps to FILE_READ_DATA plus
+			// READ_CONTROL and SYNCHRONIZE, so denying those standard rights
+			// would block every read ("Access is denied"), not just writes.
+			mask: syswindows.ACCESS_MASK(
+				syswindows.FILE_WRITE_DATA |
+					syswindows.FILE_APPEND_DATA |
+					syswindows.FILE_WRITE_EA |
+					syswindows.FILE_WRITE_ATTRIBUTES |
+					syswindows.DELETE |
+					fileDeleteChild |
+					syswindows.WRITE_DAC |
+					syswindows.WRITE_OWNER),
 			inherit: true,
 		})
 	}
@@ -560,294 +559,5 @@ func ancestors(path string) []string {
 		cleaned = parent
 	}
 	slices.Reverse(out)
-	return out
-}
-
-func createLocalUser(ctx context.Context, username string, password string) error {
-	if username == sandboxUsername {
-		if exec.CommandContext(ctx, "net", "user", username).Run() == nil {
-			cmd := exec.CommandContext(ctx, "net", "user", username, password, "/active:yes", "/expires:never", "/passwordchg:no")
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("update sandbox Windows user: %w: %s", err, strings.TrimSpace(string(out)))
-			}
-			return nil
-		}
-	}
-	cmd := exec.CommandContext(ctx, "net", "user", username, password, "/add", "/expires:never", "/passwordchg:no")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("create sandbox Windows user: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func localUserExists(ctx context.Context, username string) bool {
-	return exec.CommandContext(ctx, "net", "user", username).Run() == nil
-}
-
-func disableLocalUser(ctx context.Context, username string) error {
-	cmd := exec.CommandContext(ctx, "net", "user", username, "/active:no")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("disable sandbox Windows user: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func windowsServiceStatus(ctx context.Context, name string) (string, error) {
-	script := fmt.Sprintf("(Get-Service -Name '%s' -ErrorAction Stop).Status.ToString()", escapePowerShellSingleQuoted(name))
-	out, err := powerShellOutput(ctx, script)
-	if err != nil {
-		return "", fmt.Errorf("check Windows service %q: %w", name, err)
-	}
-	return strings.TrimSpace(out), nil
-}
-
-func powerShellOutput(ctx context.Context, script string) (string, error) {
-	cmd := exec.CommandContext(ctx,
-		"powershell.exe",
-		"-NoProfile",
-		"-ExecutionPolicy", "Bypass",
-		"-Command", script,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return string(out), nil
-}
-
-func deleteLocalUser(ctx context.Context, username string) error {
-	cmd := exec.CommandContext(ctx, "net", "user", username, "/delete")
-	if out, err := cmd.CombinedOutput(); err != nil && !strings.Contains(string(out), "could not be found") {
-		return fmt.Errorf("delete sandbox Windows user: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func lookupSID(username string) (*syswindows.SID, string, error) {
-	sid, _, typ, err := syswindows.LookupSID("", username)
-	if err != nil {
-		return nil, "", err
-	}
-	if typ != syswindows.SidTypeUser {
-		return nil, "", fmt.Errorf("temporary account %q resolved to SID type %d", username, typ)
-	}
-	return sid, sid.String(), nil
-}
-
-func addOfflineFirewallRule(ctx context.Context, ruleName string, sid string) error {
-	localUserSDDL := "D:(A;;CC;;;" + sid + ")"
-	cmd := exec.CommandContext(ctx,
-		"powershell.exe",
-		"-NoProfile",
-		"-ExecutionPolicy", "Bypass",
-		"-Command",
-		fmt.Sprintf(
-			"New-NetFirewallRule -DisplayName '%s' -Direction Outbound -Action Block -LocalUser '%s' | Out-Null",
-			escapePowerShellSingleQuoted(ruleName),
-			escapePowerShellSingleQuoted(localUserSDDL),
-		),
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("create offline firewall rule: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func removeFirewallRule(ctx context.Context, ruleName string) error {
-	cmd := exec.CommandContext(ctx,
-		"powershell.exe",
-		"-NoProfile",
-		"-ExecutionPolicy", "Bypass",
-		"-Command",
-		fmt.Sprintf(
-			"Remove-NetFirewallRule -DisplayName '%s' -ErrorAction SilentlyContinue",
-			escapePowerShellSingleQuoted(ruleName),
-		),
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("remove offline firewall rule: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func escapePowerShellSingleQuoted(value string) string {
-	return strings.ReplaceAll(value, "'", "''")
-}
-
-func newLocalCredential() (string, string, error) {
-	randomBytes := make([]byte, 8)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return "", "", err
-	}
-	username := sandboxUsername
-	password := "Sbx!" + hex.EncodeToString(randomBytes[:4]) + "9"
-	return username, password, nil
-}
-
-func localUserProfilePath(username string) string {
-	systemDrive := os.Getenv("SystemDrive")
-	if systemDrive == "" {
-		systemDrive = "C:"
-	}
-	return filepath.Join(systemDrive+`\`, "Users", username)
-}
-
-func removeLocalUserProfile(ctx context.Context, username string) error {
-	path := localUserProfilePath(username)
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err := removeLocalUserProfileByCIM(ctx, path); err == nil {
-		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-	}
-	var lastErr error
-	for range 6 {
-		cmd := exec.CommandContext(ctx, "cmd.exe", "/c", "rmdir", "/s", "/q", path)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			lastErr = fmt.Errorf("remove temporary Windows profile: %w: %s", err, strings.TrimSpace(string(out)))
-		} else if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("remove temporary Windows profile: %s still exists", path)
-}
-
-func removeLocalUserProfileByCIM(ctx context.Context, path string) error {
-	escapedPath := escapePowerShellSingleQuoted(path)
-	script := fmt.Sprintf(
-		"$target = '%s'; $profile = Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -eq $target }; if ($profile) { $profile | Remove-CimInstance -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 500; Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue",
-		escapedPath,
-	)
-	cmd := exec.CommandContext(ctx,
-		"powershell.exe",
-		"-NoProfile",
-		"-ExecutionPolicy", "Bypass",
-		"-Command", script,
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("remove temporary Windows profile through CIM: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-type lsaObjectAttributes struct {
-	Length                   uint32
-	RootDirectory            uintptr
-	ObjectName               uintptr
-	Attributes               uint32
-	SecurityDescriptor       uintptr
-	SecurityQualityOfService uintptr
-}
-
-type lsaUnicodeString struct {
-	Length        uint16
-	MaximumLength uint16
-	Buffer        *uint16
-}
-
-func grantAccountRight(sid *syswindows.SID, right string) error {
-	policy, err := openLsaPolicy(policyCreateAccount | policyLookupNames)
-	if err != nil {
-		return err
-	}
-	defer closeLsaPolicy(policy)
-
-	right16, lsaRight, err := lsaRightString(right)
-	if err != nil {
-		return err
-	}
-	status, _, _ := procLsaAddAccountRights.Call(
-		uintptr(policy),
-		uintptr(unsafe.Pointer(sid)),
-		uintptr(unsafe.Pointer(&lsaRight)),
-		1,
-	)
-	runtime.KeepAlive(right16)
-	if status != 0 {
-		return lsaStatusError(status)
-	}
-	return nil
-}
-
-func removeAccountRight(sid *syswindows.SID, right string) error {
-	policy, err := openLsaPolicy(policyLookupNames)
-	if err != nil {
-		return err
-	}
-	defer closeLsaPolicy(policy)
-
-	right16, lsaRight, err := lsaRightString(right)
-	if err != nil {
-		return err
-	}
-	status, _, _ := procLsaRemoveAccountRights.Call(
-		uintptr(policy),
-		uintptr(unsafe.Pointer(sid)),
-		0,
-		uintptr(unsafe.Pointer(&lsaRight)),
-		1,
-	)
-	runtime.KeepAlive(right16)
-	if status != 0 {
-		return lsaStatusError(status)
-	}
-	return nil
-}
-
-func openLsaPolicy(access uint32) (syswindows.Handle, error) {
-	attrs := lsaObjectAttributes{Length: uint32(unsafe.Sizeof(lsaObjectAttributes{}))}
-	var policy syswindows.Handle
-	status, _, _ := procLsaOpenPolicy.Call(
-		0,
-		uintptr(unsafe.Pointer(&attrs)),
-		uintptr(access),
-		uintptr(unsafe.Pointer(&policy)),
-	)
-	if status != 0 {
-		return 0, lsaStatusError(status)
-	}
-	return policy, nil
-}
-
-func closeLsaPolicy(policy syswindows.Handle) {
-	if policy != 0 {
-		_, _, _ = procLsaClose.Call(uintptr(policy))
-	}
-}
-
-func lsaRightString(right string) ([]uint16, lsaUnicodeString, error) {
-	right16, err := syswindows.UTF16FromString(right)
-	if err != nil {
-		return nil, lsaUnicodeString{}, err
-	}
-	return right16, lsaUnicodeString{
-		Length:        uint16((len(right16) - 1) * 2),
-		MaximumLength: uint16(len(right16) * 2),
-		Buffer:        &right16[0],
-	}, nil
-}
-
-func lsaStatusError(status uintptr) error {
-	winErr, _, _ := procLsaNtStatusToWinError.Call(status)
-	if winErr != 0 {
-		return syscall.Errno(winErr)
-	}
-	return syscall.Errno(status)
-}
-
-func cloneMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
 	return out
 }

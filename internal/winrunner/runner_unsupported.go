@@ -19,3 +19,7 @@ func (e ExitCodeError) Error() string {
 func Run(context.Context, []string) error {
 	return fmt.Errorf("Windows runner is only available on Windows, not %s", runtime.GOOS)
 }
+
+func RunRestricted(context.Context, []string) error {
+	return fmt.Errorf("Windows restricted runner is only available on Windows, not %s", runtime.GOOS)
+}

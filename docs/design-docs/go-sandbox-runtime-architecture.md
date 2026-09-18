@@ -38,7 +38,7 @@
 │   │   ├── backend.go             # 后端接口和注册
 │   │   ├── macos/                 # Seatbelt / sandbox-exec
 │   │   ├── linux/                 # bubblewrap / namespaces / seccomp / proxy bridge
-│   │   ├── windows/               # persistent local user / ACL / firewall / scheduled task runner
+│   │   ├── windows/               # disabled runner / per-run capability SID / ACL / firewall / task runner
 │   │   └── noop/                  # 显式 no-sandbox 后端，仅用于调试和测试
 │   ├── config/                    # CLI config 文件加载、合并、校验
 │   ├── fsx/                       # 路径规范化、symlink/junction 防绕过、默认保护路径
@@ -113,7 +113,7 @@ func (m *Manager) Close() error
 - `Run` 是上层客户端最常用入口。
 - `Prepare` 返回脱敏后的执行计划，供 CLI `debug plan` 和客户端诊断使用。
 - `Check` 返回当前平台能力、缺失依赖和可用后端。
-- `Setup` 做平台显式预检/预创建；当前 Windows 会创建/检查 `sandboxlocal`、batch logon right、Task Scheduler、Firewall 和 OpenSSH 状态。
+- `Setup` 做平台显式预检/预创建；当前 Windows 会创建或修复默认禁用的 `sandboxlocal` runner，并检查本地账户、batch logon right、Task Scheduler、Firewall 和 OpenSSH 能力。
 - `sandbox.MaybeRunHelper()` 供 SDK 上层应用在 `main()` 顶部承接 internal helper dispatch；`HelperPath` 供 SDK 上层应用指定具备 helper dispatch 的自身二进制、随 SDK 分发的 helper，或安装在 PATH 中的 `sandbox-local` helper。CLI 自身默认用当前 binary。Linux allowlist bridge 和 Windows scheduled-task runner 都通过该 helper 进入 internal 命令，避免误重启上层应用进程。
 - `EnforcementMode` 至少包含 `Require` 与 `BestEffort`。默认推荐 `Require`，避免“以为被隔离，实际没隔离”。
 
@@ -233,12 +233,11 @@ internal/backend/windows/
 
 实现路线：
 
-- 当前闭环使用持久但默认禁用的本地用户 `sandboxlocal` 作为 sandbox identity，并用机器级 mutex 串行化 ACL setup / cleanup。
-- `sandbox-local setup windows` 可显式创建/检查 `sandboxlocal`、授予 `SeBatchLogonRight`、检查 Task Scheduler、Windows Firewall、OpenSSH Server 和 `New-NetFirewallRule` 能力；setup 结束后账户保持 disabled。
-- 每次运行前重置 `sandboxlocal` 的随机密码、启用账号并确保 batch logon right；运行后禁用账号。setup 已经授予的 batch logon right 会保留，避免每轮都撤销再恢复。
-- 文件权限通过 ACL / DACL / ACE 表达 allow / deny，运行后恢复原始 DACL。
-- 进程启动通过一次性 Windows Scheduled Task runner 完成；runner 在受控目录生成 PowerShell wrapper，捕获 stdout/stderr/exit code 后回放给 CLI。
-- `offline` 网络通过 Windows Firewall per-user outbound block 规则实现；规则使用 `sandboxlocal` SID 的 SDDL 表达，运行后清理。
+- `sandbox-local setup windows` 可显式创建/检查 runner 账户 `sandboxlocal`、授予 `SeBatchLogonRight`、检查 Task Scheduler、Windows Firewall、OpenSSH Server 和 `New-NetFirewallRule` 能力；setup 结束后账户保持 disabled。
+- 每次真实运行重置 `sandboxlocal` 的随机密码、临时启用账户并生成随机 capability SID；cleanup 重新禁用账户。机器级 mutex 串行化 ACL setup / cleanup，避免并行运行互相恢复旧 DACL。固定 runner 避免 Scheduled Task 每次加载新用户 profile 后留下无法即时卸载的 profile hive。
+- 文件权限通过 ACL / DACL / ACE 表达。grant 同时授予 runner 账户和 capability SID；实际命令使用带 `WRITE_RESTRICTED` 标志的 token，restricting-SID 集合包含本次 capability SID、runner account SID、logon SID 和 Everyone，用于同时满足 allow-list 与 Windows profile/session/普通 runtime objects。集合明确不加入内置 Users 组，避免宿主组 ACL 绕过；write deny 只拒绝数据修改和 ownership/DACL mutation rights，不包含 `READ_CONTROL` / `SYNCHRONIZE`，避免误伤只读打开。运行后恢复原始 DACL。
+- 进程启动分两级：一次性 Windows Scheduled Task 先稳定进入 runner session，随后内部 helper 用 `CreateRestrictedToken` 和 `CreateProcessAsUser` 启动真实命令；runner 捕获 stdout/stderr/exit code 后回放给调用方。
+- `offline` 网络通过 Windows Firewall per-user outbound block 规则实现；规则使用 runner SID 的 SDDL 表达，运行后清理。
 - `allowlist` 网络通过 host-managed HTTP/HTTPS proxy + per-user outbound firewall block 实现。代理负责域名 allow/deny，firewall 阻断 `--noproxy` 等直连绕过；loopback 会保留给 managed proxy，`doctor` 会显式提示这一平台差异。
 - UTM Windows arm64 复验确认 `LogonUser/CreateProcessWithTokenW` 与 PowerShell `Start-Process -Credential` 在 SSH service 场景下会让进程以 `0xC0000142` 退出；当前实现已避开这条路径。
 
