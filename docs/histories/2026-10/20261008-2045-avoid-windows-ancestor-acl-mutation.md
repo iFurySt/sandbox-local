@@ -13,6 +13,8 @@ created.
 - Apply ACL grants only to paths explicitly present in the filesystem policy.
 - Rely on the runner token's Windows traverse privilege for parent traversal.
 - Add a Windows regression test that rejects implicit ancestor ACL plans.
+- Keep polling when the scheduled-task exit file exists but its atomic content
+  has not been written yet.
 
 This also reduces the sandbox's host mutation surface: selecting one workspace no
 longer changes ACLs on a drive root or user profile root.
