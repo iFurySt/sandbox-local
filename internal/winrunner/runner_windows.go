@@ -368,11 +368,13 @@ func waitForTaskExit(ctx context.Context, exitPath string, taskName string) (int
 	defer ticker.Stop()
 	for {
 		if raw, err := os.ReadFile(exitPath); err == nil {
-			code, parseErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+			code, ready, parseErr := parseTaskExit(raw)
 			if parseErr != nil {
-				return 0, fmt.Errorf("parse scheduled task exit code: %w", parseErr)
+				return 0, parseErr
 			}
-			return code, nil
+			if ready {
+				return code, nil
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -381,6 +383,18 @@ func waitForTaskExit(ctx context.Context, exitPath string, taskName string) (int
 		case <-ticker.C:
 		}
 	}
+}
+
+func parseTaskExit(raw []byte) (int, bool, error) {
+	value := strings.TrimSpace(string(raw))
+	if value == "" {
+		return 0, false, nil
+	}
+	code, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false, fmt.Errorf("parse scheduled task exit code: %w", err)
+	}
+	return code, true, nil
 }
 
 func deleteTask(ctx context.Context, taskName string) error {

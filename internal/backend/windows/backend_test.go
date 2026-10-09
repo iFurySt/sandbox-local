@@ -82,3 +82,23 @@ func TestWriteDenyDoesNotBlockReads(t *testing.T) {
 		t.Fatalf("write deny mask = %#x, want %#x", denyMask, wantWriteMask)
 	}
 }
+
+func TestFilesystemPlansDoNotModifyAncestors(t *testing.T) {
+	t.Parallel()
+	cwd := `C:\Users\Administrator\AppData\Local\HiWork\workspace`
+	plans, _, err := filesystemPlans(model.FilesystemPolicy{
+		ReadAllow:  []string{cwd},
+		WriteAllow: []string{cwd},
+	}, cwd)
+	if err != nil {
+		t.Fatalf("filesystemPlans() error = %v", err)
+	}
+	for _, plan := range plans {
+		if plan.label == "traverse grant" {
+			t.Fatalf("filesystemPlans() modifies ancestor ACL %q", plan.path)
+		}
+		if plan.path != cwd {
+			t.Fatalf("filesystemPlans() modifies %q outside the explicit policy path %q", plan.path, cwd)
+		}
+	}
+}

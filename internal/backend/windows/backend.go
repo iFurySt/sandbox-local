@@ -9,9 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 
 	"github.com/iFurySt/sandbox-local/internal/fsx"
@@ -434,27 +432,6 @@ func filesystemPlans(policy model.FilesystemPolicy, cwd string) ([]aclPlan, []st
 		return nil, nil, err
 	}
 
-	ancestorSet := map[string]struct{}{}
-	for _, path := range append(append([]string{}, readAllow...), writeAllow...) {
-		for _, ancestor := range ancestors(path) {
-			ancestorSet[ancestor] = struct{}{}
-		}
-	}
-	ancestorsList := make([]string, 0, len(ancestorSet))
-	for path := range ancestorSet {
-		ancestorsList = append(ancestorsList, path)
-	}
-	slices.Sort(ancestorsList)
-	for _, path := range ancestorsList {
-		plans = append(plans, aclPlan{
-			path:     path,
-			label:    "traverse grant",
-			mode:     syswindows.GRANT_ACCESS,
-			mask:     syswindows.ACCESS_MASK(syswindows.FILE_TRAVERSE | syswindows.FILE_READ_ATTRIBUTES | syswindows.READ_CONTROL | syswindows.SYNCHRONIZE),
-			inherit:  false,
-			required: false,
-		})
-	}
 	for _, path := range readAllow {
 		plans = append(plans, aclPlan{
 			path:     path,
@@ -545,19 +522,4 @@ func restoreACL(snapshot aclSnapshot) error {
 		return err
 	}
 	return syswindows.SetNamedSecurityInfo(snapshot.path, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
-}
-
-func ancestors(path string) []string {
-	cleaned := filepath.Clean(path)
-	var out []string
-	for {
-		parent := filepath.Dir(cleaned)
-		if parent == cleaned || parent == "." || parent == "" {
-			break
-		}
-		out = append(out, parent)
-		cleaned = parent
-	}
-	slices.Reverse(out)
-	return out
 }
