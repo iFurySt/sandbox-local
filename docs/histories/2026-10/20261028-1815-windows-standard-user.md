@@ -35,3 +35,5 @@ The local-account backend manages machine resources on every invocation, so one 
 - Windows 10 amd64 native tests with administrator membership disabled: file allow/deny, protected deletion/rename, ACL mutation, offline networking, nested-token attempts, descendant cancellation and overlapping cleanup.
 - macOS `go test -race ./...`, `make ci`, Windows cross-compilation and `go vet`.
 - A separate standard-account session-0 probe cannot initialize USER32; it is a documented unsupported execution context, not a passing desktop test.
+
+Compatibility follow-up: Windows 10 denies global named-pipe creation inside AppContainer, while LOCAL named pipes and inherited-stdio children work. Node child_process output capture through global pipes can time out; this limitation is reported explicitly.

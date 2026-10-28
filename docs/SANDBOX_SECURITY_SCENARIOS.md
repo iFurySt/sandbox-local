@@ -395,7 +395,8 @@ go test -v ./internal/backend/windows
 
 请在普通用户终端运行；测试会拒绝启用 Administrators 成员身份的 token。
 用用户拥有的目录放置测试可执行文件；覆盖文件 allow/deny、禁止修改 ACL、offline、
-不支持的 allowlist、嵌套 token 绕过、子进程取消和并发调用 ACL 清理。
+不支持的 allowlist、嵌套 token 绕过、子进程取消、LOCAL 命名管道和并发调用 ACL 清理。
+Node 通过全局命名管道捕获子进程输出在 Windows 10 上不兼容；继承 stdio 不触发该问题。
 PowerShell 兼容性应在交互式用户会话中单独验证；session 0 不保证 USER32 初始化。
 
 以下账户、Task Scheduler 和 firewall 场景属于提权 local-user 后端。

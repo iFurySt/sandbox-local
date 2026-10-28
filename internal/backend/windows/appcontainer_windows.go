@@ -42,6 +42,7 @@ func appContainerCheck() model.CapabilityReport {
 		Warnings: []string{
 			"AppContainer open networking retains Windows loopback isolation; domain allowlists require the elevated backend",
 			"PowerShell and other USER32 workloads require an interactive user session; service and SSH sessions may fail DLL initialization",
+			`AppContainer named pipes require \\.\pipe\LOCAL\; Node child_process with piped stdio is incompatible on some Windows versions`,
 		},
 	}
 	if err := appcontainer.Available(); err != nil {

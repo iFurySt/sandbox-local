@@ -145,7 +145,9 @@ Windows 当前 token 没有启用的 Administrators 成员身份时，自动使�
 普通用户模式支持 `offline` 和 `open`，两者都保留 Windows loopback 隔离；域名
 `allowlist` 会显式拒绝。PowerShell 等依赖 USER32 的程序需要交互式用户会话，在
 SSH 或 service 的 session 0 中可能无法初始化。程序和依赖应位于用户拥有的目录，
-或已允许应用包读取的安装目录；SDK 不修改祖先目录 ACL，也不静默取消隔离。
+或已允许应用包读取的安装目录。命名管道须使用 `\\.\pipe\LOCAL\` 命名空间；
+Windows 10 上 Node 通过全局管道捕获子进程输出会超时，继承 stdio 的子进程可用。
+SDK 不修改祖先目录 ACL，也不静默取消隔离。
 
 提权运行时，`setup windows` 会准备默认禁用的 `sandboxlocal` runner 账户。每次
 `Run` 重置密码并临时启用该账户，同时创建随机 capability SID；真实命令使用

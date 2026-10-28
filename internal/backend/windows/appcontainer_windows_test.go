@@ -27,6 +27,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "--sandbox-test-pipe" {
+		os.Exit(localPipeProbe())
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--sandbox-test-sleep" {
 		time.Sleep(time.Minute)
 		os.Exit(0)

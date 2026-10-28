@@ -149,7 +149,10 @@ remains active in both; domain `allowlist` is rejected. PowerShell and other
 USER32 workloads require an interactive user session and can fail in SSH or
 service session 0. Programs and dependencies must be readable by AppContainer:
 use user-owned directories or installations already readable by application
-packages. The SDK does not change ancestor ACLs or silently run unrestricted.
+packages. Named pipes must use the AppContainer `\\.\pipe\LOCAL\` namespace;
+Node child processes that capture output through global named pipes can time
+out (observed on Windows 10). Inherited stdio works. The SDK does not change
+ancestor ACLs or silently run unrestricted.
 
 When elevated, `setup windows` provisions the disabled `sandboxlocal` runner
 account. Each `Run` resets and temporarily enables that account, creates a fresh
