@@ -72,7 +72,7 @@ func (m *Manager) Setup(ctx context.Context, req model.SetupRequest) (model.Setu
 	}, nil
 }
 
-func (m *Manager) Prepare(ctx context.Context, req model.Request) (model.Plan, error) {
+func (m *Manager) Prepare(ctx context.Context, req model.Request) (plan model.Plan, planErr error) {
 	req, err := normalizeRequest(req)
 	if err != nil {
 		return model.Plan{}, err
@@ -103,11 +103,11 @@ func (m *Manager) Prepare(ctx context.Context, req model.Request) (model.Plan, e
 		}, err
 	}
 	if networkCleanup != nil {
-		defer networkCleanup(ctx)
+		defer func() { planErr = errors.Join(planErr, networkCleanup(context.WithoutCancel(ctx))) }()
 	}
 	prepared, backendCleanup, err := selected.Prepare(ctx, req)
 	if backendCleanup != nil {
-		_ = backendCleanup(ctx)
+		err = errors.Join(err, backendCleanup(context.WithoutCancel(ctx)))
 	}
 	if err != nil {
 		return model.Plan{
@@ -134,7 +134,7 @@ func (m *Manager) Prepare(ctx context.Context, req model.Request) (model.Plan, e
 	}, nil
 }
 
-func (m *Manager) Run(ctx context.Context, req model.Request) (model.Result, error) {
+func (m *Manager) Run(ctx context.Context, req model.Request) (result model.Result, runErr error) {
 	req, err := normalizeRequest(req)
 	if err != nil {
 		return model.Result{}, err
@@ -156,11 +156,11 @@ func (m *Manager) Run(ctx context.Context, req model.Request) (model.Result, err
 		return model.Result{}, err
 	}
 	if networkCleanup != nil {
-		defer networkCleanup(context.WithoutCancel(ctx))
+		defer func() { runErr = errors.Join(runErr, networkCleanup(context.WithoutCancel(ctx))) }()
 	}
 	prepared, backendCleanup, err := selected.Prepare(runCtx, req)
 	if backendCleanup != nil {
-		defer backendCleanup(context.WithoutCancel(ctx))
+		defer func() { runErr = errors.Join(runErr, backendCleanup(context.WithoutCancel(ctx))) }()
 	}
 	if err != nil {
 		return model.Result{}, err

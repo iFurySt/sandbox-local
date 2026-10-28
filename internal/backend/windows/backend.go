@@ -37,13 +37,16 @@ const (
 	sandboxUsername   = "sandboxlocal"
 )
 
-type Backend struct{}
+type Backend struct{ standardUser bool }
 
 func New() Backend {
-	return Backend{}
+	return Backend{standardUser: !hasAdministratorGroup()}
 }
 
-func (Backend) Name() string {
+func (b Backend) Name() string {
+	if b.standardUser {
+		return appContainerBackendName
+	}
 	return backendName
 }
 
@@ -52,6 +55,9 @@ func (Backend) Platform() string {
 }
 
 func (b Backend) Check(ctx context.Context) model.CapabilityReport {
+	if b.standardUser {
+		return appContainerCheck()
+	}
 	report := model.CapabilityReport{
 		Backend:      b.Name(),
 		Platform:     b.Platform(),
@@ -78,6 +84,9 @@ func (b Backend) Check(ctx context.Context) model.CapabilityReport {
 }
 
 func (b Backend) Setup(ctx context.Context) (model.SetupReport, error) {
+	if b.standardUser {
+		return setupAppContainer()
+	}
 	report := model.SetupReport{
 		Backend:  b.Name(),
 		Platform: b.Platform(),
@@ -168,6 +177,9 @@ func (b Backend) Setup(ctx context.Context) (model.SetupReport, error) {
 }
 
 func (b Backend) Prepare(ctx context.Context, req model.Request) (model.PreparedCommand, model.Cleanup, error) {
+	if b.standardUser {
+		return prepareAppContainer(ctx, req)
+	}
 	if len(req.Command) == 0 {
 		return model.PreparedCommand{}, nil, fmt.Errorf("command is required")
 	}

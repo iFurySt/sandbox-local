@@ -17,7 +17,8 @@ By default, `sandbox-local` wraps OS-native isolation instead of using Docker as
 | --- | --- | --- |
 | macOS | Seatbelt / `sandbox-exec` | filesystem read/write policy, `offline` / `allowlist` / `open` networking |
 | Linux | bubblewrap, namespaces, seccomp bridge | filesystem policy, network namespace, allowlist proxy, direct socket bypass blocking |
-| Windows | disabled local runner, per-run capability SID, restricted token, ACL, Scheduled Task runner, Firewall | write allow-list enforcement, `setup windows`, `offline` / `allowlist` / `open` networking, cleanup |
+| Windows, standard user | per-run AppContainer, restricted token, scoped ACLs, Job Object | filesystem allow/deny, `offline` / `open`, no administrator setup |
+| Windows, elevated | disabled local runner, capability SID, restricted token, ACL, Scheduled Task, Firewall | filesystem allow/deny, `offline` / `allowlist` / `open`, administrator required for every run |
 
 ## Quick Start
 
@@ -69,7 +70,7 @@ Allow only `example.com`:
   -- curl --fail -I --max-time 8 https://example.com
 ```
 
-Prepare Windows host requirements:
+Check Windows support in the same user context that will run commands:
 
 ```powershell
 .\bin\sandbox-local.exe setup windows
@@ -135,7 +136,22 @@ process used by the Linux bridge and Windows runner. SDK callers should set
 `Options.HelperPath` or `SANDBOX_LOCAL_HELPER` to that helper-capable binary. A
 standalone example is available in `examples/quickstart`.
 
-On Windows, `setup windows` provisions the disabled `sandboxlocal` runner
+Windows automatically selects AppContainer when the current token has no enabled
+Administrators membership. `setup windows` only checks per-user profile creation
+and removal in that mode; no service, account, scheduled task, or firewall rule
+is installed. Each invocation receives a private identity and desktop, scoped
+filesystem ACLs, and a Job Object that kills descendants on cancellation. Denied
+paths also use a restricted token because AppContainer package-SID checks ignore
+deny ACEs. Cleanup removes only the invocation's ACL entries and profile.
+
+Standard-user mode supports `offline` and `open`. Windows loopback isolation
+remains active in both; domain `allowlist` is rejected. PowerShell and other
+USER32 workloads require an interactive user session and can fail in SSH or
+service session 0. Programs and dependencies must be readable by AppContainer:
+use user-owned directories or installations already readable by application
+packages. The SDK does not change ancestor ACLs or silently run unrestricted.
+
+When elevated, `setup windows` provisions the disabled `sandboxlocal` runner
 account. Each `Run` resets and temporarily enables that account, creates a fresh
 capability SID, and launches the actual command with a `WRITE_RESTRICTED` token
 whose restricting-SID set contains that capability plus the runner account,

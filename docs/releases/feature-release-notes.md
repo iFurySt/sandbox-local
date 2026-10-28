@@ -22,3 +22,9 @@
 | 日期 | 功能域 | 用户价值 | 变更摘要 |
 | --- | --- | --- | --- |
 | 2026-09-18 | Windows sandbox | Windows 的 workspace 写权限成为严格 allow-list，并且取消或失败后仍执行完整 cleanup。 | 每次 `Run` 使用随机 capability SID 与 capability + runner + logon + Everyone restricting SIDs 的 `WRITE_RESTRICTED` token，并排除内置 Users 组；修正 write deny mask 避免阻断只读访问；cleanup 改用 detached context；capability 检查保留底层错误。 |
+
+## 2026-10
+
+| 日期 | 功能域 | 用户价值 | 变更摘要 |
+| --- | --- | --- | --- |
+| 2026-10-28 | Windows sandbox | 普通用户无需管理员初始化即可执行受限命令。 | 新增 AppContainer、restricted-token deny、局部 ACL 和进程树回收；支持 offline/open，拒绝 allowlist，保留交互式会话及文件可读性要求；提权 local-user 后端继续使用原流程。 |

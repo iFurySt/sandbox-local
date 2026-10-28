@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/iFurySt/sandbox-local/internal/appcontainer"
 	"github.com/iFurySt/sandbox-local/internal/helperprotocol"
 	"github.com/iFurySt/sandbox-local/internal/linuxbridge"
 	"github.com/iFurySt/sandbox-local/internal/winrunner"
@@ -22,6 +23,10 @@ func Run(ctx context.Context, args []string, errOut io.Writer) int {
 		if errors.As(err, &exitErr) {
 			return exitErr.Code
 		}
+		var appExit appcontainer.ExitCodeError
+		if errors.As(err, &appExit) {
+			return appExit.Code
+		}
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
@@ -35,6 +40,8 @@ func run(ctx context.Context, args []string) error {
 	command := args[0]
 	rest := args[1:]
 	switch command {
+	case helperprotocol.AppContainerRunnerCommand:
+		return appcontainer.Run(ctx, stripSeparator(rest))
 	case helperprotocol.ProxyBridgeCommand:
 		return runProxyBridge(ctx, rest)
 	case helperprotocol.ExecSeccompCommand:

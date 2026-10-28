@@ -386,6 +386,20 @@ E2E 断言：这是 Linux 特有的 seccomp/bridge 绕过回归。
 
 ## Windows
 
+普通用户模式使用 AppContainer，无需提权。原生回归测试命令：
+
+```powershell
+$env:SANDBOX_TEST_REQUIRE_STANDARD_USER = "1"
+go test -v ./internal/backend/windows
+```
+
+请在普通用户终端运行；测试会拒绝启用 Administrators 成员身份的 token。
+用用户拥有的目录放置测试可执行文件；覆盖文件 allow/deny、禁止修改 ACL、offline、
+不支持的 allowlist、嵌套 token 绕过、子进程取消和并发调用 ACL 清理。
+PowerShell 兼容性应在交互式用户会话中单独验证；session 0 不保证 USER32 初始化。
+
+以下账户、Task Scheduler 和 firewall 场景属于提权 local-user 后端。
+
 Windows 使用持久但默认禁用的 `sandboxlocal` runner；每次真实 `Run` 重置密码并临时启用该账户，同时生成随机 capability SID。实际命令使用包含 capability SID、runner account SID、本次 logon SID 与 Everyone 的 `WRITE_RESTRICTED` token；这些 SID 分别覆盖 allow-list、profile/session 和普通 runtime objects，集合明确排除内置 Users 组。进程通过一次性 Scheduled Task 启动，`allowlist` 由 host-managed HTTP/HTTPS proxy 和 per-user firewall 共同强制；loopback 当前保留给 managed proxy。
 
 ### Windows 准备

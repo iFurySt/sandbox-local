@@ -20,10 +20,11 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
         |
         +-- internal/backend/macos    # Seatbelt / sandbox-exec
         +-- internal/backend/linux    # bubblewrap / namespaces / seccomp
-        +-- internal/backend/windows  # disabled runner / per-run capability SID / ACL / firewall / task runner
+        +-- internal/backend/windows  # AppContainer (standard user) / local runner (elevated) / ACL
         |
         +-- internal/network          # host proxy / bridge / allowlist
         +-- internal/fsx              # 路径规范化和保护路径
+        +-- internal/appcontainer     # per-user profiles / restricted token / private desktop / job
         +-- internal/helper           # SDK 场景下解析 sandbox-local helper binary
         +-- internal/process          # 进程启动、stdio、进程树清理
 ```
@@ -57,7 +58,8 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 
 - macOS：固定调用 `/usr/bin/sandbox-exec`，动态生成 Seatbelt profile。
 - Linux：使用 bubblewrap / namespaces 表达 filesystem 与 network 隔离；`allowlist` 通过 sandbox 内 loopback bridge、host-managed proxy 和 seccomp exec wrapper 阻断直接 socket 绕过。
-- Windows：`sandbox-local setup windows` 准备默认禁用的 `sandboxlocal` runner，并预检本地账户、batch logon、Task Scheduler、Firewall 和 OpenSSH 能力。每次 `Run` 重置密码并临时启用账户，同时生成随机 capability SID；文件读写由普通 token 与 `WRITE_RESTRICTED` token 的双重访问检查表达。restricting-SID 集合包含本次 capability、runner account、logon SID 和 Everyone；Everyone 用于满足普通 Windows runtime objects，内置 Users 组仍明确排除，避免宿主组 ACL 绕过。命令仍通过一次性 Windows Scheduled Task 启动，以规避 UTM/SSH service 场景下直接 `CreateProcessWithTokenW` 的 `0xC0000142`。`offline` 与 `allowlist` 通过 runner 对应的 per-user Firewall 规则阻断直连，allowlist 流量走 host-managed HTTP/HTTPS proxy；运行结束恢复 ACL、删除 task/firewall rule 并禁用账户。
+- Windows 普通用户：自动选择 `windows-appcontainer`，每次调用创建并回收当前用户的 AppContainer profile。package SID 的局部 grant 与普通 restricting SID 的 deny 共同约束文件访问；跨进程文件锁串行化 ACL 更新，清理只移除当前身份的 ACE。helper 使用独立 desktop、管道 stdio 和 Job Object 启动进程树；offline 不授予网络 capability，open 保留 loopback 隔离，allowlist 显式拒绝。PowerShell 需要交互式用户会话。
+- Windows 提权进程：`sandbox-local setup windows` 准备默认禁用的 `sandboxlocal` runner，并预检本地账户、batch logon、Task Scheduler、Firewall 和 OpenSSH 能力。每次 `Run` 重置密码并临时启用账户，同时生成随机 capability SID；文件读写由普通 token 与 `WRITE_RESTRICTED` token 的双重访问检查表达。restricting-SID 集合包含本次 capability、runner account、logon SID 和 Everyone；Everyone 用于满足普通 Windows runtime objects，内置 Users 组仍明确排除，避免宿主组 ACL 绕过。命令仍通过一次性 Windows Scheduled Task 启动，以规避 UTM/SSH service 场景下直接 `CreateProcessWithTokenW` 的 `0xC0000142`。`offline` 与 `allowlist` 通过 runner 对应的 per-user Firewall 规则阻断直连，allowlist 流量走 host-managed HTTP/HTTPS proxy；运行结束恢复 ACL、删除 task/firewall rule 并禁用账户。
 
 任何平台无法强制执行的策略，都必须通过 capability report 或运行错误显式暴露，不能静默当作成功。
 
@@ -66,5 +68,5 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 - 已实现 Go module、SDK facade、Cobra CLI、配置加载和基础单元测试。
 - 已实现 macOS Seatbelt 后端闭环：文件写 allow/deny、文件 read deny、network `offline` / `allowlist` / `open`。`allowlist` 通过 host-managed HTTP/HTTPS proxy 强制执行，Seatbelt 只放行该本地代理端口；文件路径会 canonicalize 现有 symlink 前缀。
 - 已实现 Linux bubblewrap 后端闭环：只读根、writable roots、deny remount/mask、network `offline` / `allowlist` / `open`。`allowlist` 使用 `--unshare-net`、sandbox 内 loopback bridge、host Unix socket proxy 和 seccomp exec wrapper，阻断直接 AF_UNIX/socketpair 绕过；SDK 场景通过 `sandbox.MaybeRunHelper()` 让上层应用二进制承接 internal helper dispatch，并通过 `Options.HelperPath` 或 `SANDBOX_LOCAL_HELPER` 指向该 helper-capable binary。
-- 已实现 Windows local-user 后端闭环：默认禁用的 `sandboxlocal` runner、每次运行随机 capability SID、capability + runner + logon + Everyone restricting SIDs 的 `WRITE_RESTRICTED` token、ACL write allow/deny、一次性 scheduled task，以及 `offline` / `allowlist` / `open` 网络。Windows 真机已验证 SDK E2E、只读读取、写入 allow/deny、CLI allowlist 允许/拒绝、`--noproxy` 直连绕过阻断和 cleanup；`doctor` 会提示 Windows allowlist 依赖 host proxy 与 per-user firewall，loopback 会保留给 managed proxy。
+- Windows 普通用户后端无需管理员初始化，限制与执行要求见 README；原有提权 local-user 后端闭环继续保留：默认禁用的 `sandboxlocal` runner、每次运行随机 capability SID、capability + runner + logon + Everyone restricting SIDs 的 `WRITE_RESTRICTED` token、ACL write allow/deny、一次性 scheduled task，以及 `offline` / `allowlist` / `open` 网络。Windows 真机已验证 SDK E2E、只读读取、写入 allow/deny、CLI allowlist 允许/拒绝、`--noproxy` 直连绕过阻断和 cleanup；`doctor` 会提示 Windows allowlist 依赖 host proxy 与 per-user firewall，loopback 会保留给 managed proxy。
 - 仓库当前只保留基础 CI；release、SBOM 和 provenance 流水线已收口为后续明确发布需求后再接入。

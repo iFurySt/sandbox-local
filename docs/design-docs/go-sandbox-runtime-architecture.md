@@ -2,12 +2,6 @@
 
 本文定义 `sandbox-local` 从模板仓库落成跨平台 sandbox runtime 的初始目录和架构。目标是用 Go + Cobra 提供一套 SDK 与 CLI，让上层客户端应用用统一 API 运行受限进程，而不需要理解 macOS、Linux、Windows 的原生隔离细节。
 
-参考输入：
-
-- `/tmp/sandbox_repo_reference.md`
-- `/Users/bytedance/projects/github/sandbox-runtime`
-- `/Users/bytedance/projects/github/codex`
-
 ## 目标
 
 - 提供一个 Go SDK，作为所有上层客户端应用的主入口。
@@ -113,7 +107,7 @@ func (m *Manager) Close() error
 - `Run` 是上层客户端最常用入口。
 - `Prepare` 返回脱敏后的执行计划，供 CLI `debug plan` 和客户端诊断使用。
 - `Check` 返回当前平台能力、缺失依赖和可用后端。
-- `Setup` 做平台显式预检/预创建；当前 Windows 会创建或修复默认禁用的 `sandboxlocal` runner，并检查本地账户、batch logon right、Task Scheduler、Firewall 和 OpenSSH 能力。
+- `Setup` 做平台显式预检/预创建；Windows 普通用户只验证 AppContainer profile 创建和删除，提权进程会创建或修复默认禁用的 `sandboxlocal` runner，并检查本地账户、batch logon right、Task Scheduler、Firewall 和 OpenSSH 能力。
 - `sandbox.MaybeRunHelper()` 供 SDK 上层应用在 `main()` 顶部承接 internal helper dispatch；`HelperPath` 供 SDK 上层应用指定具备 helper dispatch 的自身二进制、随 SDK 分发的 helper，或安装在 PATH 中的 `sandbox-local` helper。CLI 自身默认用当前 binary。Linux allowlist bridge 和 Windows scheduled-task runner 都通过该 helper 进入 internal 命令，避免误重启上层应用进程。
 - `EnforcementMode` 至少包含 `Require` 与 `BestEffort`。默认推荐 `Require`，避免“以为被隔离，实际没隔离”。
 
@@ -231,7 +225,22 @@ internal/backend/windows/
 └── runner.go
 ```
 
-实现路线：
+普通用户使用 `windows-appcontainer`，无需机器级 provisioning。每次调用创建随机
+profile 和普通 restricting SID；前者授予文件 allow 路径，后者在保留原有用户访问检查的
+restricted token 中执行 deny。不能只依赖 package SID 的 deny ACE，因为 AppContainer
+会忽略这类拒绝。grant 不包含 WRITE_DAC、WRITE_OWNER 或 FILE_DELETE_CHILD，
+防止修改 ACL 或通过父目录删除受保护文件。不可修改的只读系统安装保留已有 ACL，
+实际访问仍须成功通过 Windows 检查；不修改祖先目录权限。
+
+helper 用私有 desktop、低完整性进程/管道对象和 Job Object 运行命令，先加入 Job 再恢复
+线程。结束或 helper 被终止时回收整个进程树。文件锁串行化同一用户跨进程/会话的 ACL
+编辑；cleanup 只删除本次 profile SID 和 restricting SID，保留并发调用的条目。
+
+普通用户 `offline` 不授予网络 capability，`open` 授予外网 capability，但均保留 loopback
+隔离；`allowlist` 显式拒绝。PowerShell 等 USER32 程序需要交互式会话，在 SSH/service
+session 0 中可能返回 DLL 初始化失败。详见 README 的运行前提。
+
+提权进程保留以下 local-user 路线（每次调用均需管理员）：
 
 - `sandbox-local setup windows` 可显式创建/检查 runner 账户 `sandboxlocal`、授予 `SeBatchLogonRight`、检查 Task Scheduler、Windows Firewall、OpenSSH Server 和 `New-NetFirewallRule` 能力；setup 结束后账户保持 disabled。
 - 每次真实运行重置 `sandboxlocal` 的随机密码、临时启用账户并生成随机 capability SID；cleanup 重新禁用账户。机器级 mutex 串行化 ACL setup / cleanup，避免并行运行互相恢复旧 DACL。固定 runner 避免 Scheduled Task 每次加载新用户 profile 后留下无法即时卸载的 profile hive。

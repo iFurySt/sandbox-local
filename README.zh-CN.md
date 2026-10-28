@@ -17,7 +17,8 @@
 | --- | --- | --- |
 | macOS | Seatbelt / `sandbox-exec` | 文件读写策略，`offline` / `allowlist` / `open` 网络 |
 | Linux | bubblewrap、namespaces、seccomp bridge | 文件策略、network namespace、allowlist proxy、直连 socket 绕过阻断 |
-| Windows | 禁用的本地 runner、每次运行 capability SID、受限 token、ACL、Scheduled Task runner、Firewall | 写入 allow-list 强制执行、`setup windows`、`offline` / `allowlist` / `open` 网络、cleanup |
+| Windows 普通用户 | 每次运行 AppContainer、受限 token、局部 ACL、Job Object | 文件 allow/deny、`offline` / `open`，无需管理员初始化 |
+| Windows 提权进程 | 禁用 runner、capability SID、受限 token、ACL、Scheduled Task、Firewall | 文件 allow/deny、`offline` / `allowlist` / `open`，每次运行都需要管理员 |
 
 ## 快速开始
 
@@ -69,7 +70,7 @@ go build -o ./bin/sandbox-local ./cmd/sandbox-local
   -- curl --fail -I --max-time 8 https://example.com
 ```
 
-Windows 先准备宿主机能力：
+Windows 在实际运行命令的用户上下文中检查能力：
 
 ```powershell
 .\bin\sandbox-local.exe setup windows
@@ -135,7 +136,18 @@ _ = result.ExitCode
 或 `SANDBOX_LOCAL_HELPER` 指向这个具备 helper dispatch 的二进制。可复制的
 独立示例见 `examples/quickstart`。
 
-Windows 下，`setup windows` 会准备默认禁用的 `sandboxlocal` runner 账户。每次
+Windows 当前 token 没有启用的 Administrators 成员身份时，自动使用 AppContainer。
+此时 `setup windows` 只验证当前用户能创建并删除 profile，无需安装服务、创建账户、
+计划任务或修改防火墙。每次调用使用独立身份、desktop、局部文件 ACL 和 Job Object；
+取消执行时回收子进程。AppContainer 的 package SID 检查忽略 deny ACE，因此额外使用
+受限 token 执行禁止路径规则。cleanup 只删除本次调用的 ACL 条目和 profile。
+
+普通用户模式支持 `offline` 和 `open`，两者都保留 Windows loopback 隔离；域名
+`allowlist` 会显式拒绝。PowerShell 等依赖 USER32 的程序需要交互式用户会话，在
+SSH 或 service 的 session 0 中可能无法初始化。程序和依赖应位于用户拥有的目录，
+或已允许应用包读取的安装目录；SDK 不修改祖先目录 ACL，也不静默取消隔离。
+
+提权运行时，`setup windows` 会准备默认禁用的 `sandboxlocal` runner 账户。每次
 `Run` 重置密码并临时启用该账户，同时创建随机 capability SID；真实命令使用
 restricting-SID 集合中包含该 capability、runner 账户、本次 logon SID 和 Everyone 的
 `WRITE_RESTRICTED` token，以满足 Windows 常规运行时对象；内置 Users 组仍明确

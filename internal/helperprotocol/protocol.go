@@ -6,6 +6,7 @@ const (
 	ExecSeccompCommand             = "__exec-seccomp"
 	WindowsRunnerCommand           = "__windows-runner"
 	WindowsRestrictedRunnerCommand = "__windows-restricted-runner"
+	AppContainerRunnerCommand      = "__windows-appcontainer"
 )
 
 func Wrap(command string, args ...string) []string {
