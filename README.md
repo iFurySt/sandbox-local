@@ -150,8 +150,9 @@ USER32 workloads require an interactive user session and can fail in SSH or
 service session 0. Programs and dependencies must be readable by AppContainer:
 use user-owned directories or installations already readable by application
 packages. Named pipes must use the AppContainer `\\.\pipe\LOCAL\` namespace;
-Node child processes that capture output through global named pipes can time
-out (observed on Windows 10). Inherited stdio works. The SDK does not change
+Node/libuv builds without the AppContainer pipe fix can hang when capturing
+child output. Inherited stdio works. See [Windows runtime compatibility](docs/windows-runtime-compatibility.md)
+for the upstream fix and a reproduction. The SDK does not change
 ancestor ACLs or silently run unrestricted.
 
 When elevated, `setup windows` provisions the disabled `sandboxlocal` runner

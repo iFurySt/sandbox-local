@@ -20,3 +20,5 @@ Completed.
 Windows 10 amd64 native tests under an administrator-disabled token cover allowed operations, blocked reads/writes/deletion/rename/ACL changes, offline networking, nested-token attempts, descendant cancellation, and overlapping cleanup. macOS race tests also pass. The actual standard-account service-session probe confirms the documented USER32 initialization limitation; interactive execution is validated with administrator membership disabled. Base CI and Windows vet pass.
 
 Compatibility follow-up: Windows 10 denies global named-pipe creation inside AppContainer, while LOCAL named pipes and inherited-stdio children work. Node child_process output capture through global pipes can time out; this limitation is reported explicitly.
+
+The Node limitation is localized to libuv and has an upstream source fix; see [Windows runtime compatibility](../../windows-runtime-compatibility.md).

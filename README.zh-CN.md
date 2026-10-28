@@ -146,7 +146,8 @@ Windows 当前 token 没有启用的 Administrators 成员身份时，自动使�
 `allowlist` 会显式拒绝。PowerShell 等依赖 USER32 的程序需要交互式用户会话，在
 SSH 或 service 的 session 0 中可能无法初始化。程序和依赖应位于用户拥有的目录，
 或已允许应用包读取的安装目录。命名管道须使用 `\\.\pipe\LOCAL\` 命名空间；
-Windows 10 上 Node 通过全局管道捕获子进程输出会超时，继承 stdio 的子进程可用。
+尚未包含 AppContainer 管道修复的 Node/libuv 在捕获子进程输出时会卡住，继承 stdio 的子进程可用。
+上游补丁与复现见 [Windows runtime compatibility](docs/windows-runtime-compatibility.md)。
 SDK 不修改祖先目录 ACL，也不静默取消隔离。
 
 提权运行时，`setup windows` 会准备默认禁用的 `sandboxlocal` runner 账户。每次
