@@ -85,7 +85,7 @@ func TestWriteDenyDoesNotBlockReads(t *testing.T) {
 
 func TestFilesystemPlansDoNotModifyAncestors(t *testing.T) {
 	t.Parallel()
-	cwd := `C:\Users\Administrator\AppData\Local\HiWork\workspace`
+	cwd := `C:\Users\Administrator\AppData\Local\ExampleAgent\workspace`
 	plans, _, err := filesystemPlans(model.FilesystemPolicy{
 		ReadAllow:  []string{cwd},
 		WriteAllow: []string{cwd},
