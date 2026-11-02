@@ -238,7 +238,7 @@ type sandboxState struct {
 	writeCapabilitySID string
 	ruleName           string
 	acls               []aclSnapshot
-	lock               syswindows.Handle
+	lock               *setupLock
 }
 
 type aclSnapshot struct {
@@ -253,8 +253,7 @@ func setup(ctx context.Context, policy model.Policy, cwd string, managedProxyPor
 	}
 	username, password, err := newLocalCredential()
 	if err != nil {
-		_ = syswindows.CloseHandle(lock)
-		return nil, nil, err
+		return nil, nil, errors.Join(err, lock.Close())
 	}
 	state := &sandboxState{username: username, password: password, lock: lock}
 	cleanupOnError := true
@@ -327,41 +326,21 @@ func (s *sandboxState) Cleanup(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	if s.lock != 0 {
-		if err := syswindows.ReleaseMutex(s.lock); err != nil {
+	if s.lock != nil {
+		if err := s.lock.Close(); err != nil {
 			errs = append(errs, err)
 		}
-		if err := syswindows.CloseHandle(s.lock); err != nil {
-			errs = append(errs, err)
-		}
-		s.lock = 0
+		s.lock = nil
 	}
 	return errors.Join(errs...)
 }
 
 func (s *sandboxState) releaseLockOnly() {
-	if s.lock == 0 {
+	if s.lock == nil {
 		return
 	}
-	_ = syswindows.ReleaseMutex(s.lock)
-	_ = syswindows.CloseHandle(s.lock)
-	s.lock = 0
-}
-
-func acquireSetupLock() (syswindows.Handle, error) {
-	name, err := syswindows.UTF16PtrFromString(`Local\sandbox-local-windows-backend`)
-	if err != nil {
-		return 0, err
-	}
-	lock, err := syswindows.CreateMutex(nil, false, name)
-	if err != nil && !(errors.Is(err, syswindows.ERROR_ALREADY_EXISTS) && lock != 0) {
-		return 0, err
-	}
-	if _, err := syswindows.WaitForSingleObject(lock, syswindows.INFINITE); err != nil {
-		_ = syswindows.CloseHandle(lock)
-		return 0, err
-	}
-	return lock, nil
+	_ = s.lock.Close()
+	s.lock = nil
 }
 
 func applyFilesystemPolicy(policy model.FilesystemPolicy, cwd string, sid, writeCapabilitySID *syswindows.SID, state *sandboxState) ([]string, error) {

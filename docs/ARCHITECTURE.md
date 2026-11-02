@@ -63,6 +63,10 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 
 任何平台无法强制执行的策略，都必须通过 capability report 或运行错误显式暴露，不能静默当作成功。
 
+Windows 管理员后端使用 `Local\sandbox-local-windows-backend` 命名 mutex 串行化 setup 与 cleanup。
+mutex 由固定在同一 OS 线程的专用 goroutine 获取和释放；调用方可以跨线程执行 cleanup。
+释放和关闭句柄完成后才返回，重复关闭不会重复释放 mutex。
+
 ## 当前实现状态
 
 - 已实现 Go module、SDK facade、Cobra CLI、配置加载和基础单元测试。
