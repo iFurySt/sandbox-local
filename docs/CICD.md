@@ -5,6 +5,8 @@
 ## 默认包含的内容
 
 - `ci.yml`：仓库级检查，覆盖 docs、repo hygiene、GitHub Action pinning、shell 脚本语法、Go 单元测试和 Markdown lint。
+- `ci.yml` 的 `windows-setup-lock`：在 Windows runner 原生执行 mutex 所有权、互斥和关闭回归；
+  每组重复 10 次，不初始化 sandbox 账户、修改 ACL 或配置防火墙。
 - `scripts/ci.sh`：本地和 GitHub Actions 共用的验证入口。
 - `scripts/check-repo-hygiene.sh`：检查仓库协作所需的基础文件是否还在。
 - `scripts/check-action-pinning.sh`：检查 workflow 里的 `uses:` 是否固定到不可变 commit SHA。
