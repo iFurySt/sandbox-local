@@ -24,10 +24,10 @@ Fix readonly execution hangs and validate Windows command execution before integ
 
 After merging the latest main, the Windows 10 x64 test host passed three complete matrix rounds: 57 SDK invocation attempts covering readonly commands, write denial, special paths/argv, binary stdin, dual-stream output, nonzero exit, bootstrap errors, cancellation, timeout, descendants, background handles and concurrent callers. Each lifecycle round audited new task/IPC residue. Setup-lock tests passed ten repetitions and transport/security tests passed three repetitions.
 
-Tested helper SHA-256: `fd51360d2d06a3dc06b610cbfb70aa9edf6543747b0bca601efc8cf49c32e6cb`.
-Test executable SHA-256: `aa4d3e3ced21084bad7408df57626fb182fc3a09ba9a6a73c26f52e2b37af3a3`.
-The code candidate is bc6f6f9; later plan updates do not change product code.
+Tested helper SHA-256: `439f432f7190f2ba840033b9b25424d2113dce1164e33be667019acb4cd6d350`.
+Test executable SHA-256: `1bd7d50f72758172f914ec124ea70597933878eb66070beec05dedad3f83594d`.
+The code candidate is 97b15c4; later plan updates do not change product code. Normal foreground completion preserves late background stdout/stderr writers, while cancellation and timeout reap descendants. All three native matrix rounds verified this distinction.
 
-The test-machine owner explicitly authorized a temporary Defender exclusion limited to its dedicated test directory; real-time protection remained enabled. Remove the exclusion after consumer testing. A separate GitHub Windows runner also passed the native tests without a task-created exclusion. Final PR checks must still pass before merge.
+The test-machine owner explicitly authorized a temporary Defender exclusion limited to its dedicated test directory; real-time protection remained enabled. Remove the exclusion after consumer testing. A separate GitHub Windows runner also passed the native tests without a task-created exclusion. GitHub run 41596635998 passed repository checks and the three-round native Windows matrix. Final PR checks must still pass before merge.
 
 Local `make ci`, `go test -race ./...`, Windows amd64 vet and ARM64 build passed. Windows ARM64 compilation does not imply ARM64 runtime validation; the elevated SSH session does not cover an interactive standard-user AppContainer session. Consumer integration remains a separate follow-up after this SDK PR merges.
