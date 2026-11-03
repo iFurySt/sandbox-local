@@ -25,7 +25,6 @@ CLI 的策略文件支持 `profiles.<name>.seatbelt.default_action: allow`。
 `sandbox-local run --policy policy.yaml --profile default -- <command>`。
 `debug plan` 的 `effective_policy` 输出包含所选 Seatbelt 策略。
 
-
 ## 三端能力
 
 | 平台 | 后端 | 当前覆盖 |
