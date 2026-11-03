@@ -59,6 +59,24 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(9)
 		}
+	case "ancestor-metadata":
+		parent, allowed, secret := os.Args[2], os.Args[3], os.Args[4]
+		if _, err := os.Stat(parent); err != nil {
+			panic(err)
+		}
+		if _, err := os.ReadFile(allowed); err != nil {
+			panic(err)
+		}
+		if _, err := os.ReadDir(parent); err == nil {
+			panic("ancestor listing allowed")
+		}
+		if _, err := os.ReadFile(secret); err == nil {
+			panic("sibling read allowed")
+		}
+		if err := os.WriteFile(secret, []byte("bad"), 0600); err == nil {
+			panic("sibling write allowed")
+		}
+		fmt.Fprint(os.Stdout, "metadata-only")
 	case "read":
 		b, err := os.ReadFile(os.Args[2])
 		if err != nil {

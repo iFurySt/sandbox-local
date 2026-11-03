@@ -252,8 +252,9 @@ type sandboxState struct {
 }
 
 type aclSnapshot struct {
-	path string
-	sddl string
+	path      string
+	sddl      string
+	localOnly bool
 }
 
 func setup(ctx context.Context, policy model.Policy, cwd string, managedProxyPort int) (*sandboxState, []string, error) {
@@ -364,6 +365,23 @@ func applyFilesystemPolicy(policy model.FilesystemPolicy, cwd string, sid, write
 		return nil, err
 	}
 	snapshots := map[string]struct{}{}
+	for _, path := range metadataAncestors(plans) {
+		entry := syswindows.EXPLICIT_ACCESS{
+			AccessPermissions: syswindows.FILE_READ_ATTRIBUTES | syswindows.FILE_TRAVERSE,
+			AccessMode:        syswindows.GRANT_ACCESS,
+			Trustee: syswindows.TRUSTEE{TrusteeForm: syswindows.TRUSTEE_IS_SID,
+				TrusteeType: syswindows.TRUSTEE_IS_USER, TrusteeValue: syswindows.TrusteeValueFromSID(sid)},
+		}
+		if err := applyPathACL(path, entry, state, snapshots, true); err != nil {
+			// System-owned ancestors can already expose metadata to the runner.
+			// Do not take ownership or change their inherited permissions.
+			if errors.Is(err, syswindows.ERROR_ACCESS_DENIED) {
+				warnings = append(warnings, fmt.Sprintf("using existing ancestor metadata permissions for %q", path))
+				continue
+			}
+			return nil, fmt.Errorf("allow ancestor metadata for %q: %w", path, err)
+		}
+	}
 	for _, plan := range plans {
 		info, err := os.Stat(plan.path)
 		if err != nil {
@@ -494,15 +512,10 @@ func filesystemPlans(policy model.FilesystemPolicy, cwd string) ([]aclPlan, []st
 }
 
 func applyACL(path string, entry syswindows.EXPLICIT_ACCESS, state *sandboxState, snapshots map[string]struct{}) error {
-	key := strings.ToLower(path)
-	if _, ok := snapshots[key]; !ok {
-		sd, err := syswindows.GetNamedSecurityInfo(path, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
-		if err != nil {
-			return err
-		}
-		state.acls = append(state.acls, aclSnapshot{path: path, sddl: sd.String()})
-		snapshots[key] = struct{}{}
-	}
+	return applyPathACL(path, entry, state, snapshots, false)
+}
+
+func applyPathACL(path string, entry syswindows.EXPLICIT_ACCESS, state *sandboxState, snapshots map[string]struct{}, localOnly bool) error {
 	sd, err := syswindows.GetNamedSecurityInfo(path, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return err
@@ -515,7 +528,15 @@ func applyACL(path string, entry syswindows.EXPLICIT_ACCESS, state *sandboxState
 	if err != nil {
 		return err
 	}
-	return syswindows.SetNamedSecurityInfo(path, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION, nil, nil, newACL, nil)
+	if err := setPathDACL(path, newACL, localOnly); err != nil {
+		return err
+	}
+	key := strings.ToLower(path)
+	if _, ok := snapshots[key]; !ok {
+		state.acls = append(state.acls, aclSnapshot{path: path, sddl: sd.String(), localOnly: localOnly})
+		snapshots[key] = struct{}{}
+	}
+	return nil
 }
 
 func restoreACL(snapshot aclSnapshot) error {
@@ -527,5 +548,5 @@ func restoreACL(snapshot aclSnapshot) error {
 	if err != nil && !errors.Is(err, syswindows.ERROR_OBJECT_NOT_FOUND) {
 		return err
 	}
-	return syswindows.SetNamedSecurityInfo(snapshot.path, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+	return setPathDACL(snapshot.path, dacl, snapshot.localOnly)
 }
