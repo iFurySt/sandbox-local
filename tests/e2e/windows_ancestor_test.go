@@ -44,7 +44,7 @@ func TestWindowsPrivateAncestorMetadata(t *testing.T) {
 		}
 	}
 	helper, fixture := buildHelper(t, workdir), windowsCommandFixture(t, workdir)
-	before, err := syswindows.GetNamedSecurityInfo(root, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
+	before, err := syswindows.GetNamedSecurityInfo(root, syswindows.SE_FILE_OBJECT, syswindows.OWNER_SECURITY_INFORMATION|syswindows.GROUP_SECURITY_INFORMATION|syswindows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestWindowsPrivateAncestorMetadata(t *testing.T) {
 			if err != nil || result.ExitCode != 0 || out.String() != "metadata-only" {
 				t.Fatalf("result=%+v err=%v stdout=%q stderr=%q", result, err, out.String(), stderr.String())
 			}
-			after, err := syswindows.GetNamedSecurityInfo(root, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
+			after, err := syswindows.GetNamedSecurityInfo(root, syswindows.SE_FILE_OBJECT, syswindows.OWNER_SECURITY_INFORMATION|syswindows.GROUP_SECURITY_INFORMATION|syswindows.DACL_SECURITY_INFORMATION)
 			if err != nil {
 				t.Fatal(err)
 			}

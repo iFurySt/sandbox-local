@@ -29,7 +29,7 @@ func TestAncestorDACLDoesNotPropagateAndRestores(t *testing.T) {
 	if err := os.WriteFile(child, []byte("private"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	before, err := syswindows.GetNamedSecurityInfo(child, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
+	before, err := syswindows.GetNamedSecurityInfo(child, syswindows.SE_FILE_OBJECT, syswindows.OWNER_SECURITY_INFORMATION|syswindows.GROUP_SECURITY_INFORMATION|syswindows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestAncestorDACLDoesNotPropagateAndRestores(t *testing.T) {
 	state := &sandboxState{}
 	entry := syswindows.EXPLICIT_ACCESS{AccessPermissions: syswindows.FILE_READ_ATTRIBUTES | syswindows.FILE_TRAVERSE, AccessMode: syswindows.GRANT_ACCESS,
 		Trustee: syswindows.TRUSTEE{TrusteeForm: syswindows.TRUSTEE_IS_SID, TrusteeValue: syswindows.TrusteeValueFromSID(sid)}}
-	parent, err := syswindows.GetNamedSecurityInfo(root, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
+	parent, err := syswindows.GetNamedSecurityInfo(root, syswindows.SE_FILE_OBJECT, syswindows.OWNER_SECURITY_INFORMATION|syswindows.GROUP_SECURITY_INFORMATION|syswindows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestAncestorDACLDoesNotPropagateAndRestores(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		after, err := syswindows.GetNamedSecurityInfo(child, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
+		after, err := syswindows.GetNamedSecurityInfo(child, syswindows.SE_FILE_OBJECT, syswindows.OWNER_SECURITY_INFORMATION|syswindows.GROUP_SECURITY_INFORMATION|syswindows.DACL_SECURITY_INFORMATION)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +61,7 @@ func TestAncestorDACLDoesNotPropagateAndRestores(t *testing.T) {
 			t.Fatalf("restore=%v changed child ACL: %s -> %s; original parent=%s", restore, before.String(), after.String(), parent.String())
 		}
 	}
-	after, err := syswindows.GetNamedSecurityInfo(root, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
+	after, err := syswindows.GetNamedSecurityInfo(root, syswindows.SE_FILE_OBJECT, syswindows.OWNER_SECURITY_INFORMATION|syswindows.GROUP_SECURITY_INFORMATION|syswindows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}
