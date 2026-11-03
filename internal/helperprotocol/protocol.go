@@ -4,6 +4,7 @@ const (
 	DispatchCommand                = "__sandbox-local-helper"
 	ProxyBridgeCommand             = "__proxy-bridge"
 	ExecSeccompCommand             = "__exec-seccomp"
+	WindowsTaskBrokerCommand       = "__windows-task-broker"
 	WindowsRunnerCommand           = "__windows-runner"
 	WindowsRestrictedRunnerCommand = "__windows-restricted-runner"
 	AppContainerRunnerCommand      = "__windows-appcontainer"

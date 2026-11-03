@@ -4,6 +4,7 @@ package windows
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -14,11 +15,38 @@ import (
 	syswindows "golang.org/x/sys/windows"
 )
 
+func TestSetupLockWaitHonorsCancellation(t *testing.T) {
+	name := fmt.Sprintf(`Local\sandbox-local-cancel-%d-%d`, os.Getpid(), time.Now().UnixNano())
+	owner, err := acquireNamedSetupLock(context.Background(), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if lock, err := acquireNamedSetupLock(ctx, name); lock != nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queued acquire: lock=%v error=%v", lock, err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("setup lock ignored the caller's deadline")
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	next, err := acquireNamedSetupLock(context.Background(), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSetupLockCleanupAcrossThreads(t *testing.T) {
 	// Keep the acquiring thread occupied so cleanup must run on another one.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	lock, err := acquireSetupLock()
+	lock, err := acquireSetupLock(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +104,7 @@ func TestSetupLockWaitsForExistingOwner(t *testing.T) {
 	acquired := make(chan *setupLock)
 	failed := make(chan error, 1)
 	go func() {
-		lock, err := acquireNamedSetupLock(name)
+		lock, err := acquireNamedSetupLock(context.Background(), name)
 		if err != nil {
 			failed <- err
 			return
@@ -109,7 +137,7 @@ func TestSetupLockWaitsForExistingOwner(t *testing.T) {
 
 func TestSetupLockConcurrentClose(t *testing.T) {
 	name := fmt.Sprintf(`Local\sandbox-local-test-%d-%d`, os.Getpid(), time.Now().UnixNano())
-	lock, err := acquireNamedSetupLock(name)
+	lock, err := acquireNamedSetupLock(context.Background(), name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +168,7 @@ func TestSetupLockRejectsConflictingObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer syswindows.CloseHandle(event)
-	lock, err := acquireNamedSetupLock(name)
+	lock, err := acquireNamedSetupLock(context.Background(), name)
 	if err == nil {
 		_ = lock.Close()
 		t.Fatal("accepted an event object as a mutex")

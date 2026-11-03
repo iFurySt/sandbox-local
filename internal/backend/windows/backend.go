@@ -11,11 +11,13 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/iFurySt/sandbox-local/internal/fsx"
 	"github.com/iFurySt/sandbox-local/internal/helper"
 	"github.com/iFurySt/sandbox-local/internal/helperprotocol"
 	"github.com/iFurySt/sandbox-local/internal/model"
+	"github.com/iFurySt/sandbox-local/internal/winrunner"
 	syswindows "golang.org/x/sys/windows"
 )
 
@@ -133,7 +135,7 @@ func (b Backend) Setup(ctx context.Context) (model.SetupReport, error) {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("OpenSSH Server service is %s", status))
 	}
 
-	lock, err := acquireSetupLock()
+	lock, err := acquireSetupLock(ctx)
 	if err != nil {
 		report.Ready = false
 		return report, err
@@ -219,19 +221,27 @@ func (b Backend) Prepare(ctx context.Context, req model.Request) (model.Prepared
 	env[envWindowsDomain] = "."
 	env[envWindowsRequest] = string(requestEnv)
 	env[envWindowsWriteCapabilitySID] = state.writeCapabilitySID
+	state.transport, err = winrunner.NewTaskTransport(state.username, ".", state.writeCapabilitySID)
+	if err != nil {
+		return model.PreparedCommand{}, nil, errors.Join(err, state.Cleanup(context.WithoutCancel(ctx)))
+	}
+	env[winrunner.TaskDirectoryEnvironment] = state.transport.Directory
 	command := []string{exe, helperprotocol.DispatchCommand, helperprotocol.WindowsRunnerCommand, "--"}
 	command = append(command, req.Command...)
 	return model.PreparedCommand{
-		Backend:  b.Name(),
-		Platform: b.Platform(),
-		Command:  command,
-		Cwd:      absCwd,
-		Env:      env,
-		Warnings: append(warnings, report.Warnings...),
+		Backend:   b.Name(),
+		Platform:  b.Platform(),
+		Command:   command,
+		Cwd:       absCwd,
+		Env:       env,
+		Warnings:  append(warnings, report.Warnings...),
+		Cancel:    state.transport.Cancel,
+		WaitDelay: 10 * time.Second,
 	}, state.Cleanup, nil
 }
 
 type sandboxState struct {
+	transport          *winrunner.TaskTransport
 	username           string
 	password           string
 	sidString          string
@@ -247,7 +257,7 @@ type aclSnapshot struct {
 }
 
 func setup(ctx context.Context, policy model.Policy, cwd string, managedProxyPort int) (*sandboxState, []string, error) {
-	lock, err := acquireSetupLock()
+	lock, err := acquireSetupLock(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -311,6 +321,11 @@ func setup(ctx context.Context, policy model.Policy, cwd string, managedProxyPor
 
 func (s *sandboxState) Cleanup(ctx context.Context) error {
 	var errs []error
+	if s.transport != nil {
+		if err := s.transport.Cleanup(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if s.ruleName != "" {
 		if err := removeFirewallRule(ctx, s.ruleName); err != nil {
 			errs = append(errs, err)

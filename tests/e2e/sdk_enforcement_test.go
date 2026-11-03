@@ -231,33 +231,6 @@ func newReadyManager(t *testing.T, ctx context.Context, helperPath string) *sand
 	return manager
 }
 
-func buildHelper(t *testing.T, workdir string) string {
-	t.Helper()
-	name := "sandbox-local"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	helperPath := filepath.Join(workdir, name)
-	cmd := exec.Command("go", "build", "-o", helperPath, "./cmd/sandbox-local")
-	cmd.Dir = repoRoot(t)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("build helper: %v\n%s", err, out.String())
-	}
-	return helperPath
-}
-
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve caller")
-	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-}
-
 func prepareWorkspace(t *testing.T) string {
 	t.Helper()
 	workdir := t.TempDir()

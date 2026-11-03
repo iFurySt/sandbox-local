@@ -35,3 +35,9 @@ jobs:
 
       - name: Run native Windows setup lock regressions
         run: go test ./internal/backend/windows -run '^TestSetupLock' -count=10 -timeout=2m
+
+      - name: Run native Windows transport security regressions
+        run: go test ./internal/winrunner -count=3 -timeout=2m
+
+      - name: Run native Windows execution regressions
+        run: go test -tags integration ./tests/e2e -run '^TestWindows(ReadOnlyTaskTransport|ExecutionTransportMatrix|ExecutionLifecycle|TaskBootstrapFailure)$' -timeout=5m

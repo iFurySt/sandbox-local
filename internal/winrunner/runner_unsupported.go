@@ -23,3 +23,7 @@ func Run(context.Context, []string) error {
 func RunRestricted(context.Context, []string) error {
 	return fmt.Errorf("Windows restricted runner is only available on Windows, not %s", runtime.GOOS)
 }
+
+func RunTaskBroker(context.Context, []string) error {
+	return fmt.Errorf("Windows task broker is only available on Windows, not %s", runtime.GOOS)
+}

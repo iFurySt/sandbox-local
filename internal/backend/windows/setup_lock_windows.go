@@ -3,7 +3,9 @@
 package windows
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 
@@ -19,11 +21,11 @@ type setupLock struct {
 	err     error
 }
 
-func acquireSetupLock() (*setupLock, error) {
-	return acquireNamedSetupLock(setupMutexName)
+func acquireSetupLock(ctx context.Context) (*setupLock, error) {
+	return acquireNamedSetupLock(ctx, setupMutexName)
 }
 
-func acquireNamedSetupLock(name string) (*setupLock, error) {
+func acquireNamedSetupLock(ctx context.Context, name string) (*setupLock, error) {
 	wideName, err := syswindows.UTF16PtrFromString(name)
 	if err != nil {
 		return nil, err
@@ -42,8 +44,27 @@ func acquireNamedSetupLock(name string) (*setupLock, error) {
 			ready <- err
 			return
 		}
-		if _, err := syswindows.WaitForSingleObject(handle, syswindows.INFINITE); err != nil {
-			ready <- errors.Join(err, syswindows.CloseHandle(handle))
+		for {
+			if err := ctx.Err(); err != nil {
+				ready <- errors.Join(err, syswindows.CloseHandle(handle))
+				return
+			}
+			state, err := syswindows.WaitForSingleObject(handle, 50)
+			if err != nil {
+				ready <- errors.Join(err, syswindows.CloseHandle(handle))
+				return
+			}
+			if state == uint32(syswindows.WAIT_TIMEOUT) {
+				continue
+			}
+			if state != syswindows.WAIT_OBJECT_0 && state != syswindows.WAIT_ABANDONED {
+				ready <- errors.Join(fmt.Errorf("unexpected setup mutex wait result %#x", state), syswindows.CloseHandle(handle))
+				return
+			}
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			ready <- errors.Join(err, syswindows.ReleaseMutex(handle), syswindows.CloseHandle(handle))
 			return
 		}
 		ready <- nil
