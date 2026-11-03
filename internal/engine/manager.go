@@ -170,6 +170,10 @@ func (m *Manager) Run(ctx context.Context, req model.Request) (result model.Resu
 	}
 	m.emit(runCtx, model.Event{Type: "backend_selected", Backend: prepared.Backend})
 	cmd := exec.CommandContext(runCtx, prepared.Command[0], prepared.Command[1:]...)
+	if prepared.Cancel != nil {
+		cmd.Cancel = prepared.Cancel
+		cmd.WaitDelay = prepared.WaitDelay
+	}
 	cmd.Dir = prepared.Cwd
 	cmd.Env = mergeEnv(os.Environ(), prepared.Env)
 	cmd.Stdin = req.Stdio.Stdin

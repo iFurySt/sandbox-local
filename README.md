@@ -41,7 +41,6 @@ profiles:
 Use `sandbox-local run --policy policy.yaml --profile default -- <command>`.
 `debug plan` output includes the selected Seatbelt policy in `effective_policy`.
 
-
 ## Platform Coverage
 
 | Platform | Backend | Current coverage |

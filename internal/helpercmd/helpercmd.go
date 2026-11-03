@@ -46,6 +46,8 @@ func run(ctx context.Context, args []string) error {
 		return runProxyBridge(ctx, rest)
 	case helperprotocol.ExecSeccompCommand:
 		return linuxbridge.ExecWithSeccomp(stripSeparator(rest))
+	case helperprotocol.WindowsTaskBrokerCommand:
+		return winrunner.RunTaskBroker(ctx, rest)
 	case helperprotocol.WindowsRunnerCommand:
 		return winrunner.Run(ctx, stripSeparator(rest))
 	case helperprotocol.WindowsRestrictedRunnerCommand:

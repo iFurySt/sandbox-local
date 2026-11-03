@@ -65,7 +65,18 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 
 Windows 管理员后端使用 `Local\sandbox-local-windows-backend` 命名 mutex 串行化 setup 与 cleanup。
 mutex 由固定在同一 OS 线程的专用 goroutine 获取和释放；调用方可以跨线程执行 cleanup。
-释放和关闭句柄完成后才返回，重复关闭不会重复释放 mutex。
+释放和关闭句柄完成后才返回，重复关闭不会重复释放 mutex；排队获取 mutex 时响应 context 取消。
+
+管理员后端将每次任务的配置、有限 stdin 输入和输出文件放在系统临时目录中的独立受保护目录，
+由宿主 backend 持有清理责任，不继承业务 CWD 的只读 ACL。配置和完成报告对本次 capability SID 禁止修改。
+Scheduled Task 直接启动 Go broker，使用 UTF-16 XML 注册任务，以保留 Unicode 和特殊字符路径；
+broker 在降权前打开 stdio 文件，按原始字节传递输入输出并独立报告启动失败和业务退出码。
+受限命令及其后代属于 Job Object；取消任务时回收进程树，前台命令正常结束则保留后台进程，并及时返回已捕获输出。
+宿主先通过受保护目录通知 helper 取消，超时后才强制结束 helper，随后停止并删除本次 task、回收目录并恢复策略。
+
+Windows 执行回归位于 `tests/e2e/windows_*_test.go`。跨编译验证可通过
+`SANDBOX_LOCAL_TEST_HELPER` 和 `SANDBOX_LOCAL_TEST_COMMAND` 指定原生 helper 与命令 fixture；
+fixture 源码为 `tests/e2e/testdata/command`。执行测试时保持系统防护开启，任何临时排除均需测试机所有者明确授权。
 
 ## 当前实现状态
 

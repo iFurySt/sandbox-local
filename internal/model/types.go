@@ -129,12 +129,14 @@ type PolicySummary struct {
 }
 
 type PreparedCommand struct {
-	Backend  string
-	Platform string
-	Command  []string
-	Cwd      string
-	Env      map[string]string
-	Warnings []string
+	Cancel    func() error
+	WaitDelay time.Duration
+	Backend   string
+	Platform  string
+	Command   []string
+	Cwd       string
+	Env       map[string]string
+	Warnings  []string
 }
 
 type CapabilityReport struct {

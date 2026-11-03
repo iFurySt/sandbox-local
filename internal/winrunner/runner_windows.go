@@ -8,8 +8,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,6 +66,8 @@ func Run(ctx context.Context, command []string) error {
 	if err != nil {
 		return err
 	}
+	ctx, stop := taskContext(ctx, os.Getenv(TaskDirectoryEnvironment))
+	defer stop()
 	code, err := runAsScheduledTask(ctx, user, domain, password, cwd, command)
 	if err != nil {
 		return err
@@ -129,14 +133,28 @@ func RunRestricted(ctx context.Context, command []string) error {
 	startup.StdInput = syswindows.Handle(os.Stdin.Fd())
 	startup.StdOutput = syswindows.Handle(os.Stdout.Fd())
 	startup.StdErr = syswindows.Handle(os.Stderr.Fd())
+	job, err := restrictedJob()
+	if err != nil {
+		return err
+	}
+	defer syswindows.CloseHandle(job)
+	if err := syswindows.SetHandleInformation(startup.StdInput, syswindows.HANDLE_FLAG_INHERIT, syswindows.HANDLE_FLAG_INHERIT); err != nil {
+		return err
+	}
 	var process syswindows.ProcessInformation
 	if err := syswindows.CreateProcessAsUser(
-		restricted, nil, &cmdline[0], nil, nil, true, 0, nil, cwdUTF16, &startup, &process,
+		restricted, nil, &cmdline[0], nil, nil, true, syswindows.CREATE_SUSPENDED, nil, cwdUTF16, &startup, &process,
 	); err != nil {
 		return fmt.Errorf("start command with write-restricted Windows token: %w", err)
 	}
 	defer syswindows.CloseHandle(process.Thread)
 	defer syswindows.CloseHandle(process.Process)
+	if err := syswindows.AssignProcessToJobObject(job, process.Process); err != nil {
+		return errors.Join(err, syswindows.TerminateProcess(process.Process, 1))
+	}
+	if _, err := syswindows.ResumeThread(process.Thread); err != nil {
+		return err
+	}
 	wait := make(chan error, 1)
 	go func() {
 		_, err := syswindows.WaitForSingleObject(process.Process, syswindows.INFINITE)
@@ -154,6 +172,9 @@ func RunRestricted(ctx context.Context, command []string) error {
 	}
 	var exitCode uint32
 	if err := syswindows.GetExitCodeProcess(process.Process, &exitCode); err != nil {
+		return err
+	}
+	if err := releaseBackgroundJob(job); err != nil {
 		return err
 	}
 	if exitCode != 0 {
@@ -243,129 +264,75 @@ func createWriteRestrictedToken(base syswindows.Token, capabilitySID *syswindows
 	return restricted, nil
 }
 
-func runAsScheduledTask(ctx context.Context, user string, domain string, password string, cwd string, command []string) (int, error) {
-	id, err := randomID()
+func runAsScheduledTask(ctx context.Context, user, domain, password, cwd string, command []string) (int, error) {
+	directory := os.Getenv(TaskDirectoryEnvironment)
+	if directory == "" {
+		return 0, errors.New("Windows task transport directory is missing")
+	}
+	transport := TaskTransport{Directory: directory}
+	config := taskConfig{Cwd: cwd, Command: command}
+	var err error
+	config.Env, err = requestEnvironment()
 	if err != nil {
 		return 0, err
 	}
-	taskName := `\sandbox-local-` + id
-	workDir, err := os.MkdirTemp(cwd, ".sandbox-local-win-"+id+"-")
+	if config.Env == nil {
+		config.Env = map[string]string{}
+	}
+	config.Env[envWindowsWriteCapabilitySID] = os.Getenv(envWindowsWriteCapabilitySID)
+	raw, err := json.Marshal(config)
 	if err != nil {
 		return 0, err
 	}
-	defer os.RemoveAll(workDir)
-
-	stdoutPath := filepath.Join(workDir, "stdout.txt")
-	stderrPath := filepath.Join(workDir, "stderr.txt")
-	exitPath := filepath.Join(workDir, "exit.txt")
-	scriptPath := filepath.Join(workDir, "run.ps1")
-	if err := writeTaskScript(scriptPath, cwd, command, stdoutPath, stderrPath, exitPath); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "request.json"), raw, 0600); err != nil {
 		return 0, err
 	}
-	defer deleteTask(context.WithoutCancel(ctx), taskName)
-
+	input, err := os.Create(filepath.Join(directory, "stdin.bin"))
+	if err != nil {
+		return 0, err
+	}
+	_, copyErr := io.Copy(input, os.Stdin)
+	if err := errors.Join(copyErr, input.Close()); err != nil {
+		return 0, err
+	}
+	helper, err := os.Executable()
+	if err != nil {
+		return 0, err
+	}
+	action := taskAction{Command: helper, Arguments: syswindows.ComposeCommandLine([]string{
+		"__sandbox-local-helper", "__windows-task-broker", directory,
+	})}
+	raw, err = xml.Marshal(taskDefinition{Version: "1.2", Namespace: "http://schemas.microsoft.com/windows/2004/02/mit/task",
+		Settings: taskSettings{ExecutionTimeLimit: "PT0S", AllowHardTerminate: true}, Actions: taskActions{Exec: action}})
+	if err != nil {
+		return 0, err
+	}
+	xmlPath := filepath.Join(directory, "task.xml")
+	if err := os.WriteFile(xmlPath, taskXMLBytes(raw), 0600); err != nil {
+		return 0, err
+	}
 	runAs := user
 	if domain != "" && domain != "." {
 		runAs = domain + `\` + user
 	} else if computer := os.Getenv("COMPUTERNAME"); computer != "" {
 		runAs = computer + `\` + user
 	}
-	start := time.Now().Add(5 * time.Minute).Format("15:04")
-	createArgs := []string{
-		"/Create",
-		"/TN", taskName,
-		"/SC", "ONCE",
-		"/ST", start,
-		"/TR", syswindows.ComposeCommandLine([]string{
-			"powershell.exe",
-			"-NoProfile",
-			"-ExecutionPolicy", "Bypass",
-			"-File", scriptPath,
-		}),
-		"/RU", runAs,
-		"/RP", password,
-		"/F",
-	}
-	if out, err := exec.CommandContext(ctx, "schtasks.exe", createArgs...).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, "schtasks.exe", "/Create", "/TN", transport.name(), "/XML", xmlPath, "/RU", runAs, "/RP", password, "/F").CombinedOutput(); err != nil {
 		return 0, fmt.Errorf("create scheduled task: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	if out, err := exec.CommandContext(ctx, "schtasks.exe", "/Run", "/TN", taskName).CombinedOutput(); err != nil {
-		return 0, fmt.Errorf("run scheduled task: %w: %s", err, strings.TrimSpace(string(out)))
+	if out, err := exec.CommandContext(ctx, "schtasks.exe", "/Run", "/TN", transport.name()).CombinedOutput(); err != nil {
+		return 0, fmt.Errorf("start scheduled task: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-
-	code, err := waitForTaskExit(ctx, exitPath, taskName)
-	time.Sleep(1 * time.Second)
-	if replayErr := replayFile(stdoutPath, os.Stdout); replayErr != nil && err == nil {
-		err = replayErr
-	}
-	if replayErr := replayFile(stderrPath, os.Stderr); replayErr != nil && err == nil {
-		err = replayErr
-	}
-	if err != nil {
-		return 0, err
-	}
-	return code, nil
-}
-
-func writeTaskScript(path string, cwd string, command []string, stdoutPath string, stderrPath string, exitPath string) error {
-	requestEnv, err := requestEnvironment()
-	if err != nil {
-		return err
-	}
-	capabilitySID := strings.TrimSpace(os.Getenv(envWindowsWriteCapabilitySID))
-	if capabilitySID == "" {
-		return errors.New("Windows write capability SID is missing")
-	}
-	requestEnv[envWindowsWriteCapabilitySID] = capabilitySID
-	helper, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	command = append([]string{helper, "__sandbox-local-helper", "__windows-restricted-runner", "--"}, command...)
-	var script strings.Builder
-	script.WriteString("$ErrorActionPreference = 'Continue'\r\n")
-	script.WriteString("Set-Location -LiteralPath ")
-	script.WriteString(powerShellString(cwd))
-	script.WriteString("\r\n")
-	for key, value := range requestEnv {
-		if !validEnvKey(key) {
-			continue
-		}
-		script.WriteString("$env:")
-		script.WriteString(key)
-		script.WriteString(" = ")
-		script.WriteString(powerShellString(value))
-		script.WriteString("\r\n")
-	}
-	script.WriteString("$out = ")
-	script.WriteString(powerShellString(stdoutPath))
-	script.WriteString("\r\n")
-	script.WriteString("$err = ")
-	script.WriteString(powerShellString(stderrPath))
-	script.WriteString("\r\n")
-	script.WriteString("$code = ")
-	script.WriteString(powerShellString(exitPath))
-	script.WriteString("\r\n")
-	script.WriteString("$proc = Start-Process -FilePath ")
-	script.WriteString(powerShellString(command[0]))
-	script.WriteString(" -ArgumentList @(")
-	for i, arg := range command[1:] {
-		if i > 0 {
-			script.WriteString(", ")
-		}
-		script.WriteString(powerShellString(arg))
-	}
-	script.WriteString(") -WorkingDirectory ")
-	script.WriteString(powerShellString(cwd))
-	script.WriteString(" -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru\r\n")
-	script.WriteString("$exitCode = $proc.ExitCode\r\n")
-	script.WriteString("Set-Content -LiteralPath $code -Value $exitCode -Encoding ascii\r\n")
-	return os.WriteFile(path, []byte(script.String()), 0o600)
+	code, waitErr := waitForTaskExit(ctx, filepath.Join(directory, "exit.txt"), transport.name())
+	outputErr := replayFile(filepath.Join(directory, "stdout.bin"), os.Stdout)
+	errorOutputErr := replayFile(filepath.Join(directory, "stderr.bin"), os.Stderr)
+	return code, errors.Join(waitErr, outputErr, errorOutputErr)
 }
 
 func waitForTaskExit(ctx context.Context, exitPath string, taskName string) (int, error) {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
+	statusAt := time.Now().Add(time.Second)
 	for {
 		if raw, err := os.ReadFile(exitPath); err == nil {
 			code, ready, parseErr := parseTaskExit(raw)
@@ -373,12 +340,32 @@ func waitForTaskExit(ctx context.Context, exitPath string, taskName string) (int
 				return 0, parseErr
 			}
 			if ready {
+				if failure, err := os.ReadFile(filepath.Join(filepath.Dir(exitPath), "failure.txt")); err == nil {
+					return 0, fmt.Errorf("scheduled-task bootstrap failed: %s", strings.TrimSpace(string(failure)))
+				} else if !errors.Is(err, os.ErrNotExist) {
+					return 0, fmt.Errorf("read scheduled-task failure: %w", err)
+				}
 				return code, nil
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return 0, fmt.Errorf("read scheduled-task completion: %w", err)
+		}
+		if time.Now().After(statusAt) {
+			statusAt = time.Now().Add(time.Second)
+			completed, result, err := scheduledTaskCompleted(ctx, taskName)
+			if err != nil {
+				return 0, err
+			}
+			if completed {
+				// A completed task has already closed its report. Check again to
+				// avoid racing the write between the first read and the query.
+				if raw, err := os.ReadFile(exitPath); errors.Is(err, os.ErrNotExist) || (err == nil && strings.TrimSpace(string(raw)) == "") {
+					return 0, fmt.Errorf("scheduled task ended without a completion report (result %#x)", result)
+				}
 			}
 		}
 		select {
 		case <-ctx.Done():
-			_ = deleteTask(context.WithoutCancel(ctx), taskName)
 			return 0, ctx.Err()
 		case <-ticker.C:
 		}
@@ -413,53 +400,11 @@ func replayFile(path string, out *os.File) error {
 	if err != nil {
 		return err
 	}
-	data = decodeTaskOutput(data)
 	if len(data) == 0 {
 		return nil
 	}
 	_, err = out.Write(data)
 	return err
-}
-
-func decodeTaskOutput(data []byte) []byte {
-	if len(data) < 2 {
-		return data
-	}
-	if data[0] == 0xff && data[1] == 0xfe {
-		return utf16BytesToUTF8(data[2:], binary.LittleEndian)
-	}
-	if data[0] == 0xfe && data[1] == 0xff {
-		return utf16BytesToUTF8(data[2:], binary.BigEndian)
-	}
-	if looksUTF16LE(data) {
-		return utf16BytesToUTF8(data, binary.LittleEndian)
-	}
-	return data
-}
-
-func looksUTF16LE(data []byte) bool {
-	if len(data) < 4 {
-		return false
-	}
-	zeros := 0
-	pairs := len(data) / 2
-	for i := 1; i < len(data); i += 2 {
-		if data[i] == 0 {
-			zeros++
-		}
-	}
-	return zeros*2 >= pairs
-}
-
-func utf16BytesToUTF8(data []byte, order binary.ByteOrder) []byte {
-	if len(data)%2 == 1 {
-		data = data[:len(data)-1]
-	}
-	words := make([]uint16, 0, len(data)/2)
-	for i := 0; i < len(data); i += 2 {
-		words = append(words, order.Uint16(data[i:i+2]))
-	}
-	return []byte(string(utf16.Decode(words)))
 }
 
 func randomID() (string, error) {
@@ -468,22 +413,6 @@ func randomID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
-}
-
-func powerShellString(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
-}
-
-func validEnvKey(key string) bool {
-	if key == "" {
-		return false
-	}
-	for _, r := range key {
-		if !(r == '_' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
-			return false
-		}
-	}
-	return true
 }
 
 func requestEnvironment() (map[string]string, error) {
@@ -499,4 +428,14 @@ func requestEnvironment() (map[string]string, error) {
 		delete(env, key)
 	}
 	return env, nil
+}
+
+func taskXMLBytes(raw []byte) []byte {
+	units := utf16.Encode([]rune(`<?xml version="1.0" encoding="UTF-16"?>` + string(raw)))
+	encoded := make([]byte, 2+2*len(units))
+	encoded[0], encoded[1] = 0xff, 0xfe
+	for i, unit := range units {
+		binary.LittleEndian.PutUint16(encoded[2+i*2:], unit)
+	}
+	return encoded
 }
