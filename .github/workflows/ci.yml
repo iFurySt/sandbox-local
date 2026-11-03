@@ -39,5 +39,8 @@ jobs:
       - name: Run native Windows transport security regressions
         run: go test ./internal/winrunner -count=3 -timeout=2m
 
+      - name: Ensure Windows policy services are running
+        run: Get-Service -Name Schedule,MpsSvc | Where-Object Status -ne 'Running' | Start-Service -ErrorAction Stop
+
       - name: Run native Windows execution regressions
-        run: go test -v -count=3 -tags integration ./tests/e2e -run '^TestWindows(ReadOnlyTaskTransport|ExecutionTransportMatrix|ExecutionLifecycle|TaskBootstrapFailure)$' -timeout=5m
+        run: go test -v -count=3 -tags integration ./tests/e2e -run '^TestWindows(ReadOnlyTaskTransport|ExecutionTransportMatrix|ExecutionLifecycle|TaskBootstrapFailure|ChildrenCannotOutlivePolicyCleanup)$' -timeout=5m

@@ -31,3 +31,9 @@ The code candidate is 97b15c4; later plan updates do not change product code. No
 The test-machine owner explicitly authorized a temporary Defender exclusion limited to its dedicated test directory; real-time protection remained enabled. Remove the exclusion after consumer testing. A separate GitHub Windows runner also passed the native tests without a task-created exclusion. GitHub run 41596635998 passed repository checks and the three-round native Windows matrix. Final PR checks must still pass before merge.
 
 Local `make ci`, `go test -race ./...`, Windows amd64 vet and ARM64 build passed. Windows ARM64 compilation does not imply ARM64 runtime validation; the elevated SSH session does not cover an interactive standard-user AppContainer session. Consumer integration remains a separate follow-up after this SDK PR merges.
+
+## Policy-lifetime follow-up
+
+The background-preserving candidate above is superseded for restricted Windows runs. A new native regression proved that both open and offline policy cleanup left its descendants running; restoring ACLs and removing firewall rules while a child remains active does not preserve the run boundary. Keep KILL_ON_JOB_CLOSE armed on normal foreground exit as well as cancellation. The native policy-lifetime regression must pass for both network modes, alongside the existing output and concurrency matrix. Consumers that provide a separate full-access host path can preserve background services through that path.
+
+Follow-up validation: Windows 10 x64 passed three complete rounds including the new open/offline policy-lifetime checks (63 SDK invocation attempts). No new task/IPC residue remained; timeout/cancellation and normal completion all reaped contained descendants. Helper SHA-256: `9c983e000e8e101a48e3913f5fd564e2bc99c2d6a902941aa8f54a87f938ab3b`; test SHA-256: `786e54aa4ece647a897465daac612c74008b9dc8fe82cf9383f70c224dd4cfde`. Local CI, race and Windows vet passed.

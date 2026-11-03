@@ -71,7 +71,7 @@ mutex 由固定在同一 OS 线程的专用 goroutine 获取和释放；调用�
 由宿主 backend 持有清理责任，不继承业务 CWD 的只读 ACL。配置和完成报告对本次 capability SID 禁止修改。
 Scheduled Task 直接启动 Go broker，使用 UTF-16 XML 注册任务，以保留 Unicode 和特殊字符路径；
 broker 在降权前打开 stdio 文件，按原始字节传递输入输出并独立报告启动失败和业务退出码。
-受限命令及其后代属于 Job Object；取消任务时回收进程树，前台命令正常结束则保留后台进程，并及时返回已捕获输出。
+受限命令及其后代属于 Job Object；前台命令结束或取消时先回收整个进程树，再清理任务并恢复 ACL 和网络规则，避免存活的子进程失去策略约束。
 宿主先通过受保护目录通知 helper 取消，超时后才强制结束 helper，随后停止并删除本次 task、回收目录并恢复策略。
 
 Windows 执行回归位于 `tests/e2e/windows_*_test.go`。跨编译验证可通过
