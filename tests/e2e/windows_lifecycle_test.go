@@ -20,6 +20,14 @@ import (
 )
 
 func TestWindowsExecutionLifecycle(t *testing.T) {
+	before := windowsTaskResources(t)
+	t.Cleanup(func() {
+		for resource := range windowsTaskResources(t) {
+			if !before[resource] {
+				t.Errorf("execution leaked owned resource: %s", resource)
+			}
+		}
+	})
 	cwd := t.TempDir()
 	helper, fixture := buildHelper(t, cwd), windowsCommandFixture(t, cwd)
 	manager, err := sandbox.NewManager(sandbox.Options{HelperPath: helper, Enforcement: sandbox.EnforcementRequire})
@@ -128,4 +136,24 @@ func TestWindowsExecutionLifecycle(t *testing.T) {
 			t.Error(err)
 		}
 	})
+}
+
+// Compare only new resources: a shared developer host may contain residue from
+// older builds, which this test must neither delete nor mistake for its own.
+func windowsTaskResources(t *testing.T) map[string]bool {
+	t.Helper()
+	result := map[string]bool{}
+	for _, pattern := range []string{
+		filepath.Join(os.TempDir(), ".sandbox-local-win-*"),
+		filepath.Join(os.Getenv("SystemRoot"), "System32", "Tasks", "sandbox-local-*"),
+	} {
+		paths, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range paths {
+			result[path] = true
+		}
+	}
+	return result
 }
