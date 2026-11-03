@@ -16,12 +16,18 @@ Fix readonly execution hangs and validate Windows command execution before integ
 - [x] Localize released failure: readonly CWD's inherited write-deny ACL blocks task output and completion files; completed tasks then appear to time out. Reproduced three consecutive times and isolated with an ACL A/B control.
 - [x] Implement private task transport and explicit failure handling.
 - [x] Run local repository CI, Windows static checks and cross-compilation.
-- [ ] Finish native Windows matrix and repeated lifecycle validation.
+- [x] Finish native Windows matrix and repeated lifecycle validation.
 - [ ] Create SDK PR, verify checks and merge after native validation.
 - [ ] Update latest consumer release to merged SDK, validate the actual Executor and create its MR only after success.
 
 ## Evidence and limits
 
-The initial private-directory candidate passed native control-file mutation tests three times and five readonly command cases. The native-broker candidate then passed special-path argv, binary stdin, simultaneous 100 KB stdout/stderr and exit-code checks. These earlier runs are evidence for their respective candidates, not a pass for the final branch.
+After merging the latest main, the Windows 10 x64 test host passed three complete matrix rounds: 57 SDK invocation attempts covering readonly commands, write denial, special paths/argv, binary stdin, dual-stream output, nonzero exit, bootstrap errors, cancellation, timeout, descendants, background handles and concurrent callers. Each lifecycle round audited new task/IPC residue. Setup-lock tests passed ten repetitions and transport/security tests passed three repetitions.
 
-Windows Defender subsequently blocked the self-built helper's scheduled-task behavior. Broader native tests and final-candidate verification remain pending; do not disable protection or add exclusions without test-machine-owner authorization. Record final artifact hashes, native results and unavailable coverage before merging. Local macOS race tests do not substitute for native Windows tests. Windows ARM64 compile checks do not imply ARM64 runtime validation, and the elevated SSH session does not cover an interactive standard-user AppContainer session.
+Tested helper SHA-256: `fd51360d2d06a3dc06b610cbfb70aa9edf6543747b0bca601efc8cf49c32e6cb`.
+Test executable SHA-256: `aa4d3e3ced21084bad7408df57626fb182fc3a09ba9a6a73c26f52e2b37af3a3`.
+The code candidate is bc6f6f9; later plan updates do not change product code.
+
+The test-machine owner explicitly authorized a temporary Defender exclusion limited to its dedicated test directory; real-time protection remained enabled. Remove the exclusion after consumer testing. A separate GitHub Windows runner also passed the native tests without a task-created exclusion. Final PR checks must still pass before merge.
+
+Local `make ci`, `go test -race ./...`, Windows amd64 vet and ARM64 build passed. Windows ARM64 compilation does not imply ARM64 runtime validation; the elevated SSH session does not cover an interactive standard-user AppContainer session. Consumer integration remains a separate follow-up after this SDK PR merges.
