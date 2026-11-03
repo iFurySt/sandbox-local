@@ -63,7 +63,7 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 
 任何平台无法强制执行的策略，都必须通过 capability report 或运行错误显式暴露，不能静默当作成功。
 
-Windows 管理员后端对允许路径的父目录仅临时授予不继承的属性读取与遍历权限，供 Node 等运行时解析真实路径；不允许列目录或读写旁支文件。父目录 DACL 通过单对象原生 API 更新与恢复，保留继承标志，不递归处理父目录树。系统拥有且不能修改的父目录沿用已有权限并返回 warning。
+Windows 管理员后端对允许路径的父目录仅临时授予不继承的属性读取、遍历与同步句柄权限，供 Node 等运行时解析真实路径；不允许列目录或读写旁支文件。父目录 DACL 通过单对象原生 API 更新与恢复，保留继承标志，不递归处理父目录树。系统拥有且不能修改的父目录沿用已有权限并返回 warning。
 
 Windows 管理员后端使用 `Local\sandbox-local-windows-backend` 命名 mutex 串行化 setup 与 cleanup。
 mutex 由固定在同一 OS 线程的专用 goroutine 获取和释放；调用方可以跨线程执行 cleanup。

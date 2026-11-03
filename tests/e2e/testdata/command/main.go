@@ -66,7 +66,7 @@ func main() {
 		}
 	case "ancestor-metadata":
 		parent, allowed, secret := os.Args[2], os.Args[3], os.Args[4]
-		if _, err := os.Stat(parent); err != nil {
+		if err := checkDirectoryMetadata(parent); err != nil {
 			panic(err)
 		}
 		if _, err := os.ReadFile(allowed); err != nil {

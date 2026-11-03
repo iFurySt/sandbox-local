@@ -367,7 +367,7 @@ func applyFilesystemPolicy(policy model.FilesystemPolicy, cwd string, sid, write
 	snapshots := map[string]struct{}{}
 	for _, path := range metadataAncestors(plans) {
 		entry := syswindows.EXPLICIT_ACCESS{
-			AccessPermissions: syswindows.FILE_READ_ATTRIBUTES | syswindows.FILE_TRAVERSE,
+			AccessPermissions: syswindows.FILE_READ_ATTRIBUTES | syswindows.FILE_TRAVERSE | syswindows.SYNCHRONIZE,
 			AccessMode:        syswindows.GRANT_ACCESS,
 			Trustee: syswindows.TRUSTEE{TrusteeForm: syswindows.TRUSTEE_IS_SID,
 				TrusteeType: syswindows.TRUSTEE_IS_USER, TrusteeValue: syswindows.TrusteeValueFromSID(sid)},
