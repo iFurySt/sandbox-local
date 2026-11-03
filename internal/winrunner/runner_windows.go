@@ -174,6 +174,9 @@ func RunRestricted(ctx context.Context, command []string) error {
 	if err := syswindows.GetExitCodeProcess(process.Process, &exitCode); err != nil {
 		return err
 	}
+	if err := releaseBackgroundJob(job); err != nil {
+		return err
+	}
 	if exitCode != 0 {
 		return ExitCodeError{Code: int(exitCode)}
 	}

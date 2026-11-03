@@ -39,12 +39,27 @@ func (t *TaskTransport) Cleanup(ctx context.Context) error {
 	var errs []error
 	taskFile := filepath.Join(os.Getenv("SystemRoot"), "System32", "Tasks", strings.TrimPrefix(t.name(), `\`))
 	if _, err := os.Stat(taskFile); err == nil {
-		completed, _, err := scheduledTaskCompleted(ctx, t.name())
-		if err != nil {
+		// A completion report commits normal foreground exit. Task Scheduler may
+		// still be retiring its action; stopping it here would kill background work.
+		completedReport := false
+		if raw, err := os.ReadFile(filepath.Join(t.Directory, "exit.txt")); err == nil {
+			_, ready, parseErr := parseTaskExit(raw)
+			completedReport = ready && parseErr == nil
+			if parseErr != nil {
+				errs = append(errs, parseErr)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
-		} else if !completed {
-			if out, err := exec.CommandContext(ctx, "schtasks.exe", "/End", "/TN", t.name()).CombinedOutput(); err != nil {
-				errs = append(errs, fmt.Errorf("end scheduled task: %w: %s", err, strings.TrimSpace(string(out))))
+		}
+		_, cancelErr := os.Stat(filepath.Join(t.Directory, "cancel"))
+		if !completedReport || cancelErr == nil {
+			completed, _, err := scheduledTaskCompleted(ctx, t.name())
+			if err != nil {
+				errs = append(errs, err)
+			} else if !completed {
+				if out, err := exec.CommandContext(ctx, "schtasks.exe", "/End", "/TN", t.name()).CombinedOutput(); err != nil {
+					errs = append(errs, fmt.Errorf("end scheduled task: %w: %s", err, strings.TrimSpace(string(out))))
+				}
 			}
 		}
 		if err := deleteTask(ctx, t.name()); err != nil {

@@ -67,19 +67,55 @@ func main() {
 		}
 		_, _ = os.Stdout.Write(b)
 	case "background":
-		child := exec.Command(os.Args[0], "background-child", os.Args[2])
+		child := exec.Command(os.Args[0], append([]string{"background-child", os.Args[2]}, os.Args[3:]...)...)
 		child.Stdout = os.Stdout
 		child.Stderr = os.Stderr
 		if err := child.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+		if len(os.Args) > 3 {
+			if err := os.WriteFile(os.Args[3]+".pid", []byte(strconv.Itoa(child.Process.Pid)), 0600); err != nil {
+				panic(err)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				if _, err := os.Stat(os.Args[3]); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					panic("background did not open marker")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 		fmt.Fprint(os.Stdout, "foreground")
 	case "background-child":
+		var marker *os.File
+		if len(os.Args) > 3 {
+			var err error
+			marker, err = os.Create(os.Args[3])
+			if err != nil {
+				panic(err)
+			}
+		}
 		n, _ := strconv.Atoi(os.Args[2])
 		time.Sleep(time.Duration(n) * time.Millisecond)
-		_, _ = os.Stdout.Write([]byte("late"))
-		_, _ = os.Stderr.Write([]byte("late-error"))
+		if _, err := os.Stdout.Write([]byte("late")); err != nil {
+			panic(err)
+		}
+		if _, err := os.Stderr.Write([]byte("late-error")); err != nil {
+			panic(err)
+		}
+		if marker != nil {
+			if _, err := marker.WriteString("survived"); err != nil {
+				panic(err)
+			}
+			if err := marker.Close(); err != nil {
+				panic(err)
+			}
+		}
+		time.Sleep(30 * time.Second)
 	default:
 		os.Exit(3)
 	}

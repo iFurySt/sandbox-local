@@ -21,3 +21,12 @@ func restrictedJob() (windows.Handle, error) {
 	}
 	return job, nil
 }
+
+// Normal foreground completion must not terminate detached background work.
+// Cancellation keeps KILL_ON_JOB_CLOSE armed until the broker is terminated.
+func releaseBackgroundJob(job windows.Handle) error {
+	limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
+	_, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits)))
+	return err
+}

@@ -105,13 +105,51 @@ func TestWindowsExecutionLifecycle(t *testing.T) {
 	}
 	t.Run("background handles", func(t *testing.T) {
 		var out, errOut bytes.Buffer
+		marker := filepath.Join(cwd, "background.marker")
+		_ = os.Remove(marker)
+		_ = os.Remove(marker + ".pid")
+		t.Cleanup(func() {
+			data, err := os.ReadFile(marker + ".pid")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			pid, err := strconv.ParseUint(string(data), 10, 32)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			handle, err := windows.OpenProcess(windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, uint32(pid))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer windows.CloseHandle(handle)
+			if err := windows.TerminateProcess(handle, 0); err != nil {
+				t.Error(err)
+			}
+			if state, err := windows.WaitForSingleObject(handle, 3000); err != nil || state != windows.WAIT_OBJECT_0 {
+				t.Errorf("background cleanup state=%d err=%v", state, err)
+			}
+		})
 		started := time.Now()
-		result, err := manager.Run(context.Background(), sandbox.Request{Command: []string{fixture, "background", "15000"}, Cwd: cwd, Policy: policy, Stdio: sandbox.Stdio{Stdout: &out, Stderr: &errOut}})
+		result, err := manager.Run(context.Background(), sandbox.Request{Command: []string{fixture, "background", "2500", marker}, Cwd: cwd, Policy: policy, Stdio: sandbox.Stdio{Stdout: &out, Stderr: &errOut}})
 		if err != nil || result.ExitCode != 0 || out.String() != "foreground" || errOut.Len() != 0 {
 			t.Fatalf("result=%+v err=%v out=%q stderr=%q", result, err, out.String(), errOut.String())
 		}
 		if elapsed := time.Since(started); elapsed > 8*time.Second {
 			t.Fatalf("waited for background handles: %s", elapsed)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			data, err := os.ReadFile(marker)
+			if err == nil && string(data) == "survived" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("background writer did not survive output detachment: %q %v", data, err)
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
 	})
 	t.Run("concurrent and repeated", func(t *testing.T) {
