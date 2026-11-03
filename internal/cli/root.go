@@ -430,7 +430,8 @@ func toPublicPolicy(policy model.Policy) sandbox.Policy {
 			Allow: policy.Network.Allow,
 			Deny:  policy.Network.Deny,
 		},
-		Process: sandbox.ProcessPolicy(policy.Process),
+		Process:  sandbox.ProcessPolicy(policy.Process),
+		Seatbelt: sandbox.SeatbeltPolicy{DefaultAction: sandbox.SeatbeltDefaultAction(policy.Seatbelt.DefaultAction)},
 	}
 }
 

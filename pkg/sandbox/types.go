@@ -50,10 +50,25 @@ type SetupRequest struct {
 	TargetPlatform string
 }
 
+// SeatbeltDefaultAction selects the macOS profile baseline. The zero value is deny.
+type SeatbeltDefaultAction string
+
+const (
+	SeatbeltDefaultDeny  SeatbeltDefaultAction = "deny"
+	SeatbeltDefaultAllow SeatbeltDefaultAction = "allow"
+)
+
+// SeatbeltPolicy applies only to macOS. Allow keeps explicit filesystem and
+// network fences but permits other OS operations, including signaling processes.
+type SeatbeltPolicy struct {
+	DefaultAction SeatbeltDefaultAction `json:"default_action,omitempty"`
+}
+
 type Policy struct {
 	Filesystem FilesystemPolicy
 	Network    NetworkPolicy
 	Process    ProcessPolicy
+	Seatbelt   SeatbeltPolicy
 }
 
 type FilesystemPolicy struct {
@@ -163,7 +178,8 @@ func toModelRequest(req Request) model.Request {
 				Allow: req.Policy.Network.Allow,
 				Deny:  req.Policy.Network.Deny,
 			},
-			Process: model.ProcessPolicy(req.Policy.Process),
+			Process:  model.ProcessPolicy(req.Policy.Process),
+			Seatbelt: model.SeatbeltPolicy{DefaultAction: model.SeatbeltDefaultAction(req.Policy.Seatbelt.DefaultAction)},
 		},
 		Stdio: model.Stdio(req.Stdio),
 	}
