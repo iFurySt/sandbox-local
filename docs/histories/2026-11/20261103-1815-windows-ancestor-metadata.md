@@ -13,6 +13,6 @@ Fix npm EPERM when an allowed runtime is installed below private AppData parents
 
 ## Validation
 
-Three native Windows x64 rounds passed the new unit and private-directory open/offline tests. Full existing transport/lifecycle matrix and repository CI are required before merge. The Engine consumer also validates actual bundled npm installs and all permission modes before its MR.
+Three native Windows x64 rounds passed the new unit/private-directory tests and the complete transport/lifecycle matrix (69 invocation attempts). Repository CI, local race checks, Windows vet and ARM64 cross-build also passed; GitHub Windows CI is required before merge. The Engine consumer separately validates actual bundled npm installs and all permission modes before its MR.
 
 The broad native run also exposed a test fixture race: the PID marker could be observed between create and write. Publish the fixture marker atomically and wait for a valid nonzero PID, preserving the process-reaping assertions and deadlines.
