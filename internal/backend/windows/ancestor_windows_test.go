@@ -38,7 +38,7 @@ func TestAncestorDACLDoesNotPropagateAndRestores(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := &sandboxState{}
-	entry := syswindows.EXPLICIT_ACCESS{AccessPermissions: syswindows.FILE_READ_ATTRIBUTES | syswindows.FILE_TRAVERSE, AccessMode: syswindows.GRANT_ACCESS, Inheritance: syswindows.OBJECT_INHERIT_ACE | syswindows.CONTAINER_INHERIT_ACE,
+	entry := syswindows.EXPLICIT_ACCESS{AccessPermissions: syswindows.FILE_READ_ATTRIBUTES | syswindows.FILE_TRAVERSE, AccessMode: syswindows.GRANT_ACCESS,
 		Trustee: syswindows.TRUSTEE{TrusteeForm: syswindows.TRUSTEE_IS_SID, TrusteeValue: syswindows.TrusteeValueFromSID(sid)}}
 	parent, err := syswindows.GetNamedSecurityInfo(root, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
 	if err != nil {
@@ -58,7 +58,7 @@ func TestAncestorDACLDoesNotPropagateAndRestores(t *testing.T) {
 			t.Fatal(err)
 		}
 		if before.String() != after.String() {
-			t.Fatalf("restore=%v changed child ACL: %s -> %s", restore, before.String(), after.String())
+			t.Fatalf("restore=%v changed child ACL: %s -> %s; original parent=%s", restore, before.String(), after.String(), parent.String())
 		}
 	}
 	after, err := syswindows.GetNamedSecurityInfo(root, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
