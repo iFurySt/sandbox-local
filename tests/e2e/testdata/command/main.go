@@ -36,7 +36,12 @@ func main() {
 		n, _ := strconv.Atoi(os.Args[2])
 		os.Exit(n)
 	case "marker-sleep":
-		if err := os.WriteFile(os.Args[2], []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		marker := os.Args[2]
+		if err := os.WriteFile(marker+".tmp", []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(9)
+		}
+		if err := os.Rename(marker+".tmp", marker); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(9)
 		}
@@ -59,6 +64,24 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(9)
 		}
+	case "ancestor-metadata":
+		parent, allowed, secret := os.Args[2], os.Args[3], os.Args[4]
+		if err := checkDirectoryMetadata(parent); err != nil {
+			panic(err)
+		}
+		if _, err := os.ReadFile(allowed); err != nil {
+			panic(err)
+		}
+		if _, err := os.ReadDir(parent); err == nil {
+			panic("ancestor listing allowed")
+		}
+		if _, err := os.ReadFile(secret); err == nil {
+			panic("sibling read allowed")
+		}
+		if err := os.WriteFile(secret, []byte("bad"), 0600); err == nil {
+			panic("sibling write allowed")
+		}
+		fmt.Fprint(os.Stdout, "metadata-only")
 	case "read":
 		b, err := os.ReadFile(os.Args[2])
 		if err != nil {

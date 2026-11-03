@@ -59,8 +59,10 @@ func TestWindowsExecutionLifecycle(t *testing.T) {
 			until := time.Now().Add(12 * time.Second)
 			for time.Now().Before(until) {
 				if data, err := os.ReadFile(marker); err == nil {
-					pid, _ = strconv.ParseUint(string(data), 10, 32)
-					break
+					if parsed, err := strconv.ParseUint(string(data), 10, 32); err == nil && parsed != 0 {
+						pid = parsed
+						break
+					}
 				}
 				select {
 				case err := <-finished:
