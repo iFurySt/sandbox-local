@@ -36,7 +36,12 @@ func main() {
 		n, _ := strconv.Atoi(os.Args[2])
 		os.Exit(n)
 	case "marker-sleep":
-		if err := os.WriteFile(os.Args[2], []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		marker := os.Args[2]
+		if err := os.WriteFile(marker+".tmp", []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(9)
+		}
+		if err := os.Rename(marker+".tmp", marker); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(9)
 		}
