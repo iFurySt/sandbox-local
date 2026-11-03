@@ -18,6 +18,7 @@ type Profile struct {
 	Filesystem Filesystem `yaml:"filesystem"`
 	Network    Network    `yaml:"network"`
 	Process    Process    `yaml:"process"`
+	Seatbelt   Seatbelt   `yaml:"seatbelt"`
 }
 
 type Filesystem struct {
@@ -39,6 +40,10 @@ type Network struct {
 	Mode  string   `yaml:"mode"`
 	Allow []string `yaml:"allow"`
 	Deny  []string `yaml:"deny"`
+}
+
+type Seatbelt struct {
+	DefaultAction string `yaml:"default_action"`
 }
 
 type Process struct {
@@ -75,6 +80,10 @@ func (f *File) Policy(profile string) (model.Policy, error) {
 }
 
 func (p Profile) Policy() (model.Policy, error) {
+	seatbelt := model.SeatbeltPolicy{DefaultAction: model.SeatbeltDefaultAction(p.Seatbelt.DefaultAction)}
+	if err := seatbelt.Validate(); err != nil {
+		return model.Policy{}, err
+	}
 	mode := model.NetworkMode(p.Network.Mode)
 	if mode == "" {
 		mode = model.NetworkOffline
@@ -104,7 +113,8 @@ func (p Profile) Policy() (model.Policy, error) {
 			Allow: append([]string(nil), p.Network.Allow...),
 			Deny:  append([]string(nil), p.Network.Deny...),
 		},
-		Process: model.ProcessPolicy{Timeout: timeout},
+		Process:  model.ProcessPolicy{Timeout: timeout},
+		Seatbelt: seatbelt,
 	}, nil
 }
 
