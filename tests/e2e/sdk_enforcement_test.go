@@ -18,6 +18,12 @@ import (
 )
 
 func TestSDKUpperAppFilesystemIsolation(t *testing.T) {
+	for _, action := range []sandbox.SeatbeltDefaultAction{sandbox.SeatbeltDefaultDeny, sandbox.SeatbeltDefaultAllow} {
+		t.Run(string(action), func(t *testing.T) { testSDKUpperAppFilesystemIsolation(t, action) })
+	}
+}
+
+func testSDKUpperAppFilesystemIsolation(t *testing.T, action sandbox.SeatbeltDefaultAction) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -26,6 +32,7 @@ func TestSDKUpperAppFilesystemIsolation(t *testing.T) {
 	manager := newReadyManager(t, ctx, helperPath)
 
 	policy := basePolicy(workdir)
+	policy.Seatbelt.DefaultAction = action
 	var out bytes.Buffer
 	result, err := manager.Run(ctx, sandbox.Request{
 		Command: writeAllowedCommand(),
@@ -94,7 +101,7 @@ func TestSDKUpperAppFilesystemIsolation(t *testing.T) {
 	if result.ExitCode == 0 {
 		t.Fatalf("denied read unexpectedly succeeded\n%s", out.String())
 	}
-	if strings.Contains(out.String(), "secret") {
+	if strings.Contains(out.String(), "protected-content-fixture-7f3a") {
 		t.Fatalf("denied read leaked protected content\n%s", out.String())
 	}
 }
@@ -130,6 +137,12 @@ func TestWindowsRunCleanup(t *testing.T) {
 }
 
 func TestSDKUpperAppNetworkIsolation(t *testing.T) {
+	for _, action := range []sandbox.SeatbeltDefaultAction{sandbox.SeatbeltDefaultDeny, sandbox.SeatbeltDefaultAllow} {
+		t.Run(string(action), func(t *testing.T) { testSDKUpperAppNetworkIsolation(t, action) })
+	}
+}
+
+func testSDKUpperAppNetworkIsolation(t *testing.T, action sandbox.SeatbeltDefaultAction) {
 	if _, err := exec.LookPath(curlCommand()); err != nil {
 		t.Skipf("curl is required for network E2E: %v", err)
 	}
@@ -140,11 +153,13 @@ func TestSDKUpperAppNetworkIsolation(t *testing.T) {
 	helperPath := buildHelper(t, workdir)
 	manager := newReadyManager(t, ctx, helperPath)
 
+	policy := basePolicy(workdir)
+	policy.Seatbelt.DefaultAction = action
 	var out bytes.Buffer
 	result, err := manager.Run(ctx, sandbox.Request{
 		Command: curlHeadCommand("https://example.com", false),
 		Cwd:     workdir,
-		Policy:  withNetwork(basePolicy(workdir), sandbox.NetworkOffline, nil),
+		Policy:  withNetwork(policy, sandbox.NetworkOffline, nil),
 		Stdio:   sandbox.Stdio{Stdout: &out, Stderr: &out},
 	})
 	if err != nil {
@@ -166,7 +181,7 @@ func TestSDKUpperAppNetworkIsolation(t *testing.T) {
 	result, err = manager.Run(ctx, sandbox.Request{
 		Command: curlHeadCommand("https://example.com", false),
 		Cwd:     workdir,
-		Policy:  withNetwork(basePolicy(workdir), sandbox.NetworkAllowlist, []string{"example.com"}),
+		Policy:  withNetwork(policy, sandbox.NetworkAllowlist, []string{"example.com"}),
 		Stdio:   sandbox.Stdio{Stdout: &out, Stderr: &out},
 	})
 	if err != nil {
@@ -180,7 +195,7 @@ func TestSDKUpperAppNetworkIsolation(t *testing.T) {
 	result, err = manager.Run(ctx, sandbox.Request{
 		Command: curlHeadCommand("https://openai.com", false),
 		Cwd:     workdir,
-		Policy:  withNetwork(basePolicy(workdir), sandbox.NetworkAllowlist, []string{"example.com"}),
+		Policy:  withNetwork(policy, sandbox.NetworkAllowlist, []string{"example.com"}),
 		Stdio:   sandbox.Stdio{Stdout: &out, Stderr: &out},
 	})
 	if err != nil {
@@ -194,7 +209,7 @@ func TestSDKUpperAppNetworkIsolation(t *testing.T) {
 	result, err = manager.Run(ctx, sandbox.Request{
 		Command: curlHeadCommand("https://example.com", true),
 		Cwd:     workdir,
-		Policy:  withNetwork(basePolicy(workdir), sandbox.NetworkAllowlist, []string{"example.com"}),
+		Policy:  withNetwork(policy, sandbox.NetworkAllowlist, []string{"example.com"}),
 		Stdio:   sandbox.Stdio{Stdout: &out, Stderr: &out},
 	})
 	if err != nil {
@@ -264,7 +279,7 @@ func prepareWorkspace(t *testing.T) string {
 	if err := os.Mkdir(filepath.Join(workdir, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, "secret.txt"), []byte("secret"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "secret.txt"), []byte("protected-content-fixture-7f3a"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return workdir
@@ -307,7 +322,7 @@ func readDeniedCommand() []string {
 	if runtime.GOOS == "windows" {
 		return []string{"cmd.exe", "/c", "type secret.txt"}
 	}
-	return []string{"/bin/sh", "-c", "cat secret.txt >/dev/null"}
+	return []string{"/bin/sh", "-c", "cat secret.txt"}
 }
 
 func curlCommand() string {

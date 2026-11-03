@@ -74,6 +74,9 @@ func (b Backend) Prepare(_ context.Context, req model.Request) (model.PreparedCo
 }
 
 func buildProfile(policy model.Policy, cwd string, managedProxyPort int) (string, error) {
+	if err := policy.Seatbelt.Validate(); err != nil {
+		return "", err
+	}
 	writeAllow, err := fsx.AbsList(policy.Filesystem.WriteAllow, cwd)
 	if err != nil {
 		return "", err
@@ -88,7 +91,12 @@ func buildProfile(policy model.Policy, cwd string, managedProxyPort int) (string
 	}
 	var sb strings.Builder
 	sb.WriteString("(version 1)\n")
-	sb.WriteString("(deny default)\n")
+	if policy.Seatbelt.DefaultAction == model.SeatbeltDefaultAllow {
+		// Preserve resource fences when other OS operations are allowed by default.
+		sb.WriteString("(allow default)\n(deny file-read*)\n(deny file-write*)\n(deny network*)\n")
+	} else {
+		sb.WriteString("(deny default)\n")
+	}
 	sb.WriteString("(allow process*)\n")
 	sb.WriteString("(allow sysctl-read)\n")
 	writeReadAllowRule(&sb, readDeny)

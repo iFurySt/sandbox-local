@@ -245,6 +245,9 @@ func (m *Manager) emit(ctx context.Context, event model.Event) {
 }
 
 func normalizeRequest(req model.Request) (model.Request, error) {
+	if err := req.Policy.Seatbelt.Validate(); err != nil {
+		return req, err
+	}
 	if len(req.Command) == 0 {
 		return req, errors.New("command is required")
 	}
@@ -280,6 +283,7 @@ func mergeEnv(base []string, overlay map[string]string) []string {
 
 func summarizePolicy(policy model.Policy) model.PolicySummary {
 	return model.PolicySummary{
+		Seatbelt:   policy.Seatbelt,
 		Filesystem: policy.Filesystem,
 		Network:    policy.Network,
 	}

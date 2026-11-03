@@ -11,6 +11,21 @@
 
 默认不把 Docker 当作 sandbox 后端，而是封装各主流 OS 的原生隔离能力。
 
+## 可选的 macOS Seatbelt 基线
+
+默认仍采用 `(deny default)`。SDK 调用方可显式设置
+`sandbox.Policy{Seatbelt: sandbox.SeatbeltPolicy{DefaultAction: sandbox.SeatbeltDefaultAllow}}`，
+改用 `(allow default)`，同时保留显式文件读写和网络限制。其他 OS 操作（包括宿主用户权限内的
+进程信号）将被允许；此模式比仅授权 signal 更宽，不提供进程隔离边界。
+省略或设为 `deny` 时保留原有 profile，未知值返回错误。该选项在 Linux 和 Windows 上不生效。
+系统限制仍可能阻止 macOS `/bin/ps` 等 setuid 程序启动。
+
+CLI 的策略文件支持 `profiles.<name>.seatbelt.default_action: allow`。
+例如在现有策略中加入该字段后，使用
+`sandbox-local run --policy policy.yaml --profile default -- <command>`。
+`debug plan` 的 `effective_policy` 输出包含所选 Seatbelt 策略。
+
+
 ## 三端能力
 
 | 平台 | 后端 | 当前覆盖 |

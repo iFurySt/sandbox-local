@@ -11,6 +11,37 @@ It exposes the same policy and backend path through two entry points:
 
 By default, `sandbox-local` wraps OS-native isolation instead of using Docker as the sandbox backend.
 
+## Optional macOS Seatbelt baseline
+
+The default remains `(deny default)`. SDK callers can explicitly select
+`sandbox.Policy{Seatbelt: sandbox.SeatbeltPolicy{DefaultAction: sandbox.SeatbeltDefaultAllow}}`.
+This switches to `(allow default)` while retaining explicit filesystem read/write
+and network fences. Other OS operations, including signals to processes allowed
+by the host user permissions, become available. This is broader than a signal-only
+grant and is not a process isolation boundary. Omitted or `deny` preserves the
+existing profile; unknown values are rejected. The option has no effect on Linux
+or Windows. System restrictions can still prevent setuid programs such as macOS
+`/bin/ps` from starting.
+
+The equivalent CLI policy file is:
+
+```yaml
+version: 1
+profiles:
+  default:
+    seatbelt:
+      default_action: allow
+    network:
+      mode: offline
+    filesystem:
+      write:
+        allow: ["."]
+```
+
+Use `sandbox-local run --policy policy.yaml --profile default -- <command>`.
+`debug plan` output includes the selected Seatbelt policy in `effective_policy`.
+
+
 ## Platform Coverage
 
 | Platform | Backend | Current coverage |

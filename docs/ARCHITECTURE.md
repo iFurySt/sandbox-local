@@ -56,7 +56,7 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 
 ## 平台边界
 
-- macOS：固定调用 `/usr/bin/sandbox-exec`，动态生成 Seatbelt profile。
+- macOS：`Policy.Seatbelt.DefaultAction` 支持显式选择 `allow` 基线，省略或 `deny` 保持现有默认拒绝行为；两种基线均保留文件与网络规则。固定调用 `/usr/bin/sandbox-exec`，动态生成 Seatbelt profile。
 - Linux：使用 bubblewrap / namespaces 表达 filesystem 与 network 隔离；`allowlist` 通过 sandbox 内 loopback bridge、host-managed proxy 和 seccomp exec wrapper 阻断直接 socket 绕过。
 - Windows 普通用户：自动选择 `windows-appcontainer`，每次调用创建并回收当前用户的 AppContainer profile。package SID 的局部 grant 与普通 restricting SID 的 deny 共同约束文件访问；跨进程文件锁串行化 ACL 更新，清理只移除当前身份的 ACE。helper 使用独立 desktop、管道 stdio 和 Job Object 启动进程树；offline 不授予网络 capability，open 保留 loopback 隔离，allowlist 显式拒绝。PowerShell 需要交互式用户会话。
 - Windows 提权进程：`sandbox-local setup windows` 准备默认禁用的 `sandboxlocal` runner，并预检本地账户、batch logon、Task Scheduler、Firewall 和 OpenSSH 能力。每次 `Run` 重置密码并临时启用账户，同时生成随机 capability SID；文件读写由普通 token 与 `WRITE_RESTRICTED` token 的双重访问检查表达。restricting-SID 集合包含本次 capability、runner account、logon SID 和 Everyone；Everyone 用于满足普通 Windows runtime objects，内置 Users 组仍明确排除，避免宿主组 ACL 绕过。命令仍通过一次性 Windows Scheduled Task 启动，以规避 UTM/SSH service 场景下直接 `CreateProcessWithTokenW` 的 `0xC0000142`。`offline` 与 `allowlist` 通过 runner 对应的 per-user Firewall 规则阻断直连，allowlist 流量走 host-managed HTTP/HTTPS proxy；运行结束恢复 ACL、删除 task/firewall rule 并禁用账户。
