@@ -40,14 +40,26 @@ func TestWindowsExecutionLifecycle(t *testing.T) {
 		}
 	})
 	policy := sandbox.Policy{Filesystem: sandbox.FilesystemPolicy{ReadAllow: []string{cwd}, WriteAllow: []string{cwd}}, Network: sandbox.NetworkPolicy{Mode: sandbox.NetworkOpen}, Process: sandbox.ProcessPolicy{Timeout: 20 * time.Second}}
-	for _, mode := range []string{"cancel", "timeout"} {
-		t.Run(mode, func(t *testing.T) {
-			marker := filepath.Join(cwd, mode+".pid")
+	for _, scenario := range []struct {
+		network sandbox.NetworkMode
+		mode    string
+	}{
+		{sandbox.NetworkOpen, "cancel"}, {sandbox.NetworkOpen, "timeout"},
+		{sandbox.NetworkOffline, "cancel"}, {sandbox.NetworkOffline, "timeout"},
+	} {
+		mode := scenario.mode
+		name := string(scenario.network) + "_" + mode
+		t.Run(name, func(t *testing.T) {
+			marker := filepath.Join(cwd, name+".pid")
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			current := policy
+			current.Network.Mode = scenario.network
 			if mode == "timeout" {
 				current.Process.Timeout = 5 * time.Second
+				if scenario.network == sandbox.NetworkOffline {
+					current.Process.Timeout = 12 * time.Second
+				}
 			}
 			var partial bytes.Buffer
 			finished := make(chan error, 1)
