@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 const TaskDirectoryEnvironment = "SANDBOX_LOCAL_WINDOWS_TASK_DIRECTORY"
@@ -68,7 +70,7 @@ func (t *TaskTransport) Cleanup(ctx context.Context) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		errs = append(errs, err)
 	}
-	errs = append(errs, os.RemoveAll(t.Directory))
+	errs = append(errs, removeTaskDirectory(ctx, t.Directory))
 	return errors.Join(errs...)
 }
 
@@ -96,4 +98,28 @@ func taskContext(parent context.Context, directory string) (context.Context, con
 		}
 	}()
 	return ctx, cancel
+}
+
+// Task termination is asynchronous. Completion/stdin handles can briefly deny
+// deletion even after the scheduler has accepted End/Delete. Retry only these
+// transient filesystem failures; never hide a persistent cleanup failure.
+func removeTaskDirectory(ctx context.Context, directory string) error {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := os.RemoveAll(directory)
+		if err == nil {
+			return nil
+		}
+		transient := errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_DIR_NOT_EMPTY)
+		if !transient || !time.Now().Before(deadline) {
+			return err
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
