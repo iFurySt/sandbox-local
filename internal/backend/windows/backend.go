@@ -524,6 +524,11 @@ func applyPathACL(path string, entry syswindows.EXPLICIT_ACCESS, state *sandboxS
 	if err != nil && !errors.Is(err, syswindows.ERROR_OBJECT_NOT_FOUND) {
 		return err
 	}
+	// A null DACL already permits metadata access. Replacing it with a
+	// narrow grant would unexpectedly remove other users' existing access.
+	if localOnly && dacl == nil {
+		return nil
+	}
 	newACL, err := syswindows.ACLFromEntries([]syswindows.EXPLICIT_ACCESS{entry}, dacl)
 	if err != nil {
 		return err
