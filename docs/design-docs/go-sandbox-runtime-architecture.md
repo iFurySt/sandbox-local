@@ -105,7 +105,7 @@ func (m *Manager) Close() error
 设计点：
 
 - `Run` 是上层客户端最常用入口。
-- `Prepare` 返回脱敏后的执行计划，供 CLI `debug plan` 和客户端诊断使用。
+- `Prepare` 返回脱敏后的执行计划，供 CLI `debug plan` 和客户端诊断使用；临时后端资源在返回前清理，计划中的临时路径不用于后续执行。
 - `Check` 返回当前平台能力、缺失依赖和可用后端。
 - `Setup` 做平台显式预检/预创建；Windows 普通用户只验证 AppContainer profile 创建和删除，提权进程会创建或修复默认禁用的 `sandboxlocal` runner，并检查本地账户、batch logon right、Task Scheduler、Firewall 和 OpenSSH 能力。
 - `sandbox.MaybeRunHelper()` 供 SDK 上层应用在 `main()` 顶部承接 internal helper dispatch；`HelperPath` 供 SDK 上层应用指定具备 helper dispatch 的自身二进制、随 SDK 分发的 helper，或安装在 PATH 中的 `sandbox-local` helper。CLI 自身默认用当前 binary。Linux allowlist bridge 和 Windows scheduled-task runner 都通过该 helper 进入 internal 命令，避免误重启上层应用进程。
@@ -186,6 +186,7 @@ internal/backend/macos/
 
 - 固定调用 `/usr/bin/sandbox-exec`，不从 `PATH` 查找。
 - 动态生成 Seatbelt profile，表达 filesystem、network、Unix socket 和必要的 Mach lookup 规则。
+- profile 写入权限为 `0700` 的临时目录中的 `0600` 文件，通过 `-f` 加载，避免大型文件系统策略触发进程启动参数长度限制。后端返回 cleanup，由 `Run` 在成功、失败、取消或超时后调用；创建或写入失败会拒绝执行并返回错误。
 - 网络 allowlist 通过 host proxy 统一裁决，只允许 sandboxed process 访问本地代理端口。
 - 可选接入 macOS sandbox violation log，统一转换为 SDK event。
 
