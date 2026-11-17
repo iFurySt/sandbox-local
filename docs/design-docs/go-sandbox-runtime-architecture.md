@@ -186,7 +186,7 @@ internal/backend/macos/
 
 - 固定调用 `/usr/bin/sandbox-exec`，不从 `PATH` 查找。
 - 动态生成 Seatbelt profile，表达 filesystem、network、Unix socket 和必要的 Mach lookup 规则。
-- profile 写入权限为 `0700` 的临时目录中的 `0600` 文件，通过 `-f` 加载，避免大型文件系统策略触发进程启动参数长度限制。后端返回 cleanup，由 `Run` 在成功、失败、取消或超时后调用；创建或写入失败会拒绝执行并返回错误。
+- profile 通过 `-p` 作为单个完整参数传递，不创建临时文件或 cleanup 资源。策略受 macOS 进程参数大小上限约束；超出该上限的任意大策略不受支持，启动会返回系统错误。
 - 网络 allowlist 通过 host proxy 统一裁决，只允许 sandboxed process 访问本地代理端口。
 - 可选接入 macOS sandbox violation log，统一转换为 SDK event。
 
