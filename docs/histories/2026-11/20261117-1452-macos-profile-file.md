@@ -33,6 +33,7 @@ to the current user. Existing cleanup ownership remains in the execution manager
 - The large-profile regression fails with `argument list too long` before the
   backend change.
 - Affected backend and SDK tests pass with the race detector on macOS.
+- Repository CI, affected-package vet and documentation lint pass.
 
 ### Files Modified
 
@@ -41,3 +42,4 @@ to the current user. Existing cleanup ownership remains in the execution manager
 - `pkg/sandbox/profile_darwin_test.go`
 - `docs/ARCHITECTURE.md`
 - `docs/design-docs/go-sandbox-runtime-architecture.md`
+- `docs/releases/feature-release-notes.md`
