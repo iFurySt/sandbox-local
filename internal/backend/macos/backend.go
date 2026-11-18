@@ -2,10 +2,8 @@ package macos
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/iFurySt/sandbox-local/internal/fsx"
@@ -44,7 +42,7 @@ func (b Backend) Check(context.Context) model.CapabilityReport {
 	return report
 }
 
-func (b Backend) Prepare(ctx context.Context, req model.Request) (model.PreparedCommand, model.Cleanup, error) {
+func (b Backend) Prepare(_ context.Context, req model.Request) (model.PreparedCommand, model.Cleanup, error) {
 	if len(req.Command) == 0 {
 		return model.PreparedCommand{}, nil, fmt.Errorf("command is required")
 	}
@@ -64,18 +62,7 @@ func (b Backend) Prepare(ctx context.Context, req model.Request) (model.Prepared
 	if err != nil {
 		return model.PreparedCommand{}, nil, err
 	}
-	directory, err := os.MkdirTemp("", "sandbox-local-seatbelt-")
-	if err != nil {
-		return model.PreparedCommand{}, nil, fmt.Errorf("create Seatbelt profile directory: %w", err)
-	}
-	cleanup := func(context.Context) error { return os.RemoveAll(directory) }
-	filename := filepath.Join(directory, "profile.sb")
-	if err := os.WriteFile(filename, []byte(policy), 0600); err != nil {
-		return model.PreparedCommand{}, nil, errors.Join(
-			fmt.Errorf("write Seatbelt profile: %w", err), cleanup(context.WithoutCancel(ctx)),
-		)
-	}
-	command := []string{sandboxExecPath, "-f", filename}
+	command := []string{sandboxExecPath, "-p", policy}
 	command = append(command, req.Command...)
 	return model.PreparedCommand{
 		Backend:  b.Name(),
@@ -83,7 +70,7 @@ func (b Backend) Prepare(ctx context.Context, req model.Request) (model.Prepared
 		Command:  command,
 		Cwd:      absCwd,
 		Env:      cloneMap(req.Env),
-	}, cleanup, nil
+	}, nil, nil
 }
 
 func buildProfile(policy model.Policy, cwd string, managedProxyPort int) (string, error) {

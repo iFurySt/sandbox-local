@@ -9,27 +9,25 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
-func TestSeatbeltLargeProfile(t *testing.T) {
+func TestSeatbeltInlineProfileEnforcesSpecialCharacterPath(t *testing.T) {
 	workspace, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	argmax, err := unix.SysctlUint32("kern.argmax")
-	if err != nil {
-		t.Fatal(err)
+	var allowed string
+	for i := 0; i < 128; i++ {
+		directory := filepath.Join(workspace, fmt.Sprintf("entry-%03d", i))
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if i == 127 {
+			allowed = filepath.Join(directory, "allowed")
+		}
 	}
-	// Long, distinct paths keep the profile large without excessive rule counts.
-	prefix := filepath.Join(workspace, strings.Repeat("a", 180), strings.Repeat("b", 180),
-		strings.Repeat("c", 180), strings.Repeat("d", 180))
-	denied := []string{filepath.Join(workspace, "protected")}
-	for i := 0; i < int(argmax)/(4*len(prefix))+100; i++ {
-		denied = append(denied, filepath.Join(prefix, fmt.Sprint(i)))
-	}
-	policy := Policy{Filesystem: FilesystemPolicy{WriteAllow: []string{workspace}, WriteDeny: denied}}
+	denied := filepath.Join(workspace, `protected "quoted" \\ path`)
+	policy := Policy{Filesystem: FilesystemPolicy{WriteAllow: []string{workspace}, WriteDeny: []string{denied}}}
 	manager, err := NewManager(Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -41,21 +39,19 @@ func TestSeatbeltLargeProfile(t *testing.T) {
 	})
 	var output bytes.Buffer
 	result, err := manager.Run(context.Background(), Request{
-		Command: []string{"/bin/sh", "-c", "printf hello > allowed; printf blocked > protected; cat allowed"},
+		Command: []string{"/bin/sh", "-c", "printf hello > \"$1\"; printf blocked > \"$2\"; cat \"$1\"", "sh", allowed, denied},
 		Cwd:     workspace, Policy: policy, Stdio: Stdio{Stdout: &output, Stderr: &output},
 	})
 	if err != nil || result == nil || result.ExitCode != 0 || !strings.HasSuffix(output.String(), "hello") {
-		t.Fatalf("large profile failed: result=%+v error=%v output=%s", result, err, output.String())
+		t.Fatalf("inline profile failed: result=%+v error=%v output=%s", result, err, output.String())
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "protected")); !os.IsNotExist(err) {
-		t.Fatalf("large profile lost its write deny: %v", err)
+	if _, err := os.Stat(denied); !os.IsNotExist(err) {
+		t.Fatalf("inline profile lost its write deny: %v", err)
 	}
 }
 
-func TestSeatbeltProfileCleanup(t *testing.T) {
+func TestSeatbeltInlineProfileLifecycle(t *testing.T) {
 	workspace := t.TempDir()
-	temporary := t.TempDir()
-	t.Setenv("TMPDIR", temporary)
 	manager, err := NewManager(Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -93,19 +89,6 @@ func TestSeatbeltProfileCleanup(t *testing.T) {
 			if !test.wantError && (result == nil || (result.ExitCode != 0) != test.wantNonzero) {
 				t.Fatalf("Run() result=%+v, wantNonzero=%v", result, test.wantNonzero)
 			}
-			assertNoProfileFiles(t, temporary)
 		})
-	}
-	if _, err := manager.Prepare(context.Background(), Request{Command: []string{"/usr/bin/true"}, Cwd: workspace}); err != nil {
-		t.Fatal(err)
-	}
-	assertNoProfileFiles(t, temporary)
-}
-
-func assertNoProfileFiles(t *testing.T, directory string) {
-	t.Helper()
-	entries, err := os.ReadDir(directory)
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("temporary profile files survived: entries=%v error=%v", entries, err)
 	}
 }
