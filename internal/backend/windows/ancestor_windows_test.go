@@ -44,7 +44,7 @@ func TestAncestorDACLDoesNotPropagateAndRestores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := applyPathACL(root, entry, state, map[string]struct{}{}, true); err != nil {
+	if err := applyPathACL(root, entry, sid, state, map[string]struct{}{}, true); err != nil {
 		t.Fatal(err)
 	}
 	for _, restore := range []bool{false, true} {
@@ -85,7 +85,7 @@ func TestAncestorDACLNullRemainsUnchanged(t *testing.T) {
 	}
 	state := &sandboxState{}
 	entry := syswindows.EXPLICIT_ACCESS{AccessPermissions: syswindows.FILE_READ_ATTRIBUTES | syswindows.FILE_TRAVERSE | syswindows.SYNCHRONIZE, AccessMode: syswindows.GRANT_ACCESS, Trustee: syswindows.TRUSTEE{TrusteeForm: syswindows.TRUSTEE_IS_SID, TrusteeValue: syswindows.TrusteeValueFromSID(sid)}}
-	if err := applyPathACL(root, entry, state, map[string]struct{}{}, true); err != nil {
+	if err := applyPathACL(root, entry, sid, state, map[string]struct{}{}, true); err != nil {
 		t.Fatal(err)
 	}
 	after, err := syswindows.GetNamedSecurityInfo(root, syswindows.SE_FILE_OBJECT, syswindows.OWNER_SECURITY_INFORMATION|syswindows.GROUP_SECURITY_INFORMATION|syswindows.DACL_SECURITY_INFORMATION)

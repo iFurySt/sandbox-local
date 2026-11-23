@@ -67,9 +67,9 @@ func (b Backend) Check(ctx context.Context) model.CapabilityReport {
 		Sandboxed:    true,
 		NetworkModes: []string{string(model.NetworkOffline), string(model.NetworkAllowlist), string(model.NetworkOpen)},
 		Warnings:     []string{"Windows network allowlist uses a host-managed proxy plus per-user outbound firewall blocking; loopback remains available for the managed proxy"},
-		Notes:        []string{"Windows uses a disabled local runner account plus a fresh per-run capability SID, a write-restricted token, filesystem ACLs, a one-shot scheduled task, and per-user outbound firewall rules"},
+		Notes:        []string{"Windows uses a temporary local account, a private desktop, a per-run capability SID, a write-restricted token, filesystem ACLs, and per-user outbound firewall rules"},
 	}
-	for _, name := range []string{"net.exe", "powershell.exe", "schtasks.exe"} {
+	for _, name := range []string{"net.exe", "powershell.exe"} {
 		if _, err := exec.LookPath(name); err != nil {
 			report.Available = false
 			report.Sandboxed = false
@@ -80,7 +80,7 @@ func (b Backend) Check(ctx context.Context) model.CapabilityReport {
 		report.Available = false
 		report.Sandboxed = false
 		report.Missing = append(report.Missing, "elevated administrator token")
-		report.Warnings = append(report.Warnings, "Windows sandbox setup needs elevation to manage sandboxlocal, edit ACLs, create scheduled tasks, and manage firewall rules")
+		report.Warnings = append(report.Warnings, "Windows sandbox needs elevation to manage local accounts, edit ACLs, and manage firewall rules")
 	}
 	return report
 }
@@ -105,15 +105,6 @@ func (b Backend) Setup(ctx context.Context) (model.SetupReport, error) {
 	if !check.Available {
 		report.Ready = false
 		return report, fmt.Errorf("backend %q is unavailable: %s", b.Name(), strings.Join(check.Missing, ", "))
-	}
-	if status, err := windowsServiceStatus(ctx, "Schedule"); err != nil {
-		report.Ready = false
-		report.Missing = append(report.Missing, "Task Scheduler service")
-		return report, err
-	} else if !strings.EqualFold(status, "Running") {
-		report.Ready = false
-		report.Missing = append(report.Missing, "Task Scheduler service running")
-		return report, fmt.Errorf("Task Scheduler service is %s", status)
 	}
 	if status, err := windowsServiceStatus(ctx, "MpsSvc"); err != nil {
 		report.Ready = false
@@ -207,13 +198,11 @@ func (b Backend) Prepare(ctx context.Context, req model.Request) (model.Prepared
 	}
 	exe, err := helper.Resolve(req.HelperPath)
 	if err != nil {
-		_ = state.Cleanup(context.WithoutCancel(ctx))
-		return model.PreparedCommand{}, nil, err
+		return model.PreparedCommand{}, nil, errors.Join(err, state.Cleanup(context.WithoutCancel(ctx)))
 	}
 	requestEnv, err := json.Marshal(req.Env)
 	if err != nil {
-		_ = state.Cleanup(context.WithoutCancel(ctx))
-		return model.PreparedCommand{}, nil, err
+		return model.PreparedCommand{}, nil, errors.Join(err, state.Cleanup(context.WithoutCancel(ctx)))
 	}
 	env := map[string]string{}
 	env[envWindowsUser] = state.username
@@ -244,25 +233,29 @@ type sandboxState struct {
 	transport          *winrunner.TaskTransport
 	username           string
 	password           string
+	accountCreated     bool
 	sidString          string
 	writeCapabilitySID string
 	ruleName           string
 	acls               []aclSnapshot
 	lock               *setupLock
+	keepLock           bool
+	aclUnlock          func() error
 }
 
 type aclSnapshot struct {
 	path      string
-	sddl      string
+	sddl      string // Only populated when the original DACL was null.
+	sid       *syswindows.SID
 	localOnly bool
 }
 
-func setup(ctx context.Context, policy model.Policy, cwd string, managedProxyPort int) (*sandboxState, []string, error) {
+func setup(ctx context.Context, policy model.Policy, cwd string, managedProxyPort int) (_ *sandboxState, _ []string, resultErr error) {
 	lock, err := acquireSetupLock(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	username, password, err := newLocalCredential()
+	username, password, err := newInvocationLocalCredential()
 	if err != nil {
 		return nil, nil, errors.Join(err, lock.Close())
 	}
@@ -270,11 +263,15 @@ func setup(ctx context.Context, policy model.Policy, cwd string, managedProxyPor
 	cleanupOnError := true
 	defer func() {
 		if cleanupOnError {
-			_ = state.Cleanup(context.WithoutCancel(ctx))
+			resultErr = errors.Join(resultErr, state.Cleanup(context.WithoutCancel(ctx)))
 		}
 	}()
 
-	if err := createLocalUser(ctx, username, password); err != nil {
+	if err := createInvocationLocalUser(username, password); err != nil {
+		return nil, nil, err
+	}
+	state.accountCreated = true
+	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 	sid, sidString, err := lookupSID(username)
@@ -287,8 +284,11 @@ func setup(ctx context.Context, policy model.Policy, cwd string, managedProxyPor
 		return nil, nil, err
 	}
 	state.writeCapabilitySID = writeCapabilitySID.String()
-	if err := grantAccountRight(sid, seBatchLogonRight); err != nil {
-		return nil, nil, fmt.Errorf("grant batch logon right to sandbox Windows user: %w", err)
+	// Coordinate with AppContainer edits by the same desktop user. A null
+	// DACL replacement retains both locks until its full rollback.
+	state.aclUnlock, err = lockAppContainerACL(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 	warnings, err := applyFilesystemPolicy(policy.Filesystem, cwd, sid, writeCapabilitySID, state)
 	if err != nil {
@@ -316,6 +316,18 @@ func setup(ctx context.Context, policy model.Policy, cwd string, managedProxyPor
 		return nil, nil, fmt.Errorf("unsupported network mode %q", policy.Network.Mode)
 	}
 
+	if !state.keepLock {
+		if err := state.aclUnlock(); err != nil {
+			state.aclUnlock = nil
+			return nil, nil, err
+		}
+		state.aclUnlock = nil
+		if err := state.lock.Close(); err != nil {
+			state.lock = nil
+			return nil, nil, err
+		}
+		state.lock = nil
+	}
 	cleanupOnError = false
 	return state, warnings, nil
 }
@@ -332,14 +344,35 @@ func (s *sandboxState) Cleanup(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	for i := len(s.acls) - 1; i >= 0; i-- {
-		if err := restoreACL(s.acls[i]); err != nil {
+	if len(s.acls) != 0 {
+		if s.lock == nil {
+			lock, err := acquireSetupLock(ctx)
 			errs = append(errs, err)
+			s.lock = lock
+		}
+		if s.lock != nil && s.aclUnlock == nil {
+			unlock, err := lockAppContainerACL(ctx)
+			errs = append(errs, err)
+			s.aclUnlock = unlock
+		}
+		if s.lock != nil && s.aclUnlock != nil {
+			for i := len(s.acls) - 1; i >= 0; i-- {
+				errs = append(errs, restoreACL(s.acls[i]))
+			}
 		}
 	}
-	if s.username != "" {
-		if err := disableLocalUser(ctx, s.username); err != nil {
-			errs = append(errs, err)
+	if s.aclUnlock != nil {
+		errs = append(errs, s.aclUnlock())
+		s.aclUnlock = nil
+	}
+	if s.accountCreated {
+		if s.sidString != "" {
+			errs = append(errs, deleteInvocationProfile(s.sidString))
+		}
+		if err := deleteInvocationLocalUser(ctx, s.username); err != nil {
+			errs = append(errs, err, disableLocalUser(ctx, s.username))
+		} else {
+			s.accountCreated = false
 		}
 	}
 	if s.lock != nil {
@@ -372,7 +405,7 @@ func applyFilesystemPolicy(policy model.FilesystemPolicy, cwd string, sid, write
 			Trustee: syswindows.TRUSTEE{TrusteeForm: syswindows.TRUSTEE_IS_SID,
 				TrusteeType: syswindows.TRUSTEE_IS_USER, TrusteeValue: syswindows.TrusteeValueFromSID(sid)},
 		}
-		if err := applyPathACL(path, entry, state, snapshots, true); err != nil {
+		if err := applyPathACL(path, entry, sid, state, snapshots, true); err != nil {
 			// System-owned ancestors can already expose metadata to the runner.
 			// Do not take ownership or change their inherited permissions.
 			if errors.Is(err, syswindows.ERROR_ACCESS_DENIED) {
@@ -396,12 +429,12 @@ func applyFilesystemPolicy(policy model.FilesystemPolicy, cwd string, sid, write
 			inheritance = syswindows.OBJECT_INHERIT_ACE | syswindows.CONTAINER_INHERIT_ACE
 		}
 		entries := aclEntries(plan, inheritance, sid, writeCapabilitySID)
-		if err := applyACL(plan.path, entries[0], state, snapshots); err != nil {
+		if err := applyPathACL(plan.path, entries[0], sid, state, snapshots, false); err != nil {
 			return nil, fmt.Errorf("apply %s ACL to %q: %w", plan.label, plan.path, err)
 		}
 		if len(entries) == 2 {
 			entry := entries[1]
-			if err := applyACL(plan.path, entry, state, snapshots); err != nil {
+			if err := applyPathACL(plan.path, entry, writeCapabilitySID, state, snapshots, false); err != nil {
 				return nil, fmt.Errorf("apply %s capability ACL to %q: %w", plan.label, plan.path, err)
 			}
 		}
@@ -511,11 +544,7 @@ func filesystemPlans(policy model.FilesystemPolicy, cwd string) ([]aclPlan, []st
 	return plans, nil, nil
 }
 
-func applyACL(path string, entry syswindows.EXPLICIT_ACCESS, state *sandboxState, snapshots map[string]struct{}) error {
-	return applyPathACL(path, entry, state, snapshots, false)
-}
-
-func applyPathACL(path string, entry syswindows.EXPLICIT_ACCESS, state *sandboxState, snapshots map[string]struct{}, localOnly bool) error {
+func applyPathACL(path string, entry syswindows.EXPLICIT_ACCESS, sid *syswindows.SID, state *sandboxState, snapshots map[string]struct{}, localOnly bool) error {
 	sd, err := syswindows.GetNamedSecurityInfo(path, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return err
@@ -537,14 +566,37 @@ func applyPathACL(path string, entry syswindows.EXPLICIT_ACCESS, state *sandboxS
 		return err
 	}
 	key := strings.ToLower(path)
-	if _, ok := snapshots[key]; !ok {
+	if _, ok := snapshots[key]; ok {
+		return nil
+	}
+	if dacl == nil {
+		// A null DACL has no ACEs to restore incrementally. Retain the
+		// legacy execution lock whenever a policy replaces one.
 		state.acls = append(state.acls, aclSnapshot{path: path, sddl: sd.String(), localOnly: localOnly})
 		snapshots[key] = struct{}{}
+		state.keepLock = true
+	} else {
+		state.acls = append(state.acls, aclSnapshot{path: path, sid: sid, localOnly: localOnly})
 	}
 	return nil
 }
 
 func restoreACL(snapshot aclSnapshot) error {
+	if snapshot.sid != nil {
+		sd, err := syswindows.GetNamedSecurityInfo(snapshot.path, syswindows.SE_FILE_OBJECT, syswindows.DACL_SECURITY_INFORMATION)
+		if err != nil {
+			return err
+		}
+		dacl, _, err := sd.DACL()
+		if err != nil {
+			return err
+		}
+		updated, err := removeInvocationACE(dacl, snapshot.sid)
+		if err != nil {
+			return err
+		}
+		return setPathDACL(snapshot.path, updated, snapshot.localOnly)
+	}
 	sd, err := syswindows.SecurityDescriptorFromString(snapshot.sddl)
 	if err != nil {
 		return err

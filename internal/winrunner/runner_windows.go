@@ -5,20 +5,15 @@ package winrunner
 import (
 	"context"
 	"crypto/rand"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
-	"unicode/utf16"
 	"unsafe"
 
 	syswindows "golang.org/x/sys/windows"
@@ -68,7 +63,7 @@ func Run(ctx context.Context, command []string) error {
 	}
 	ctx, stop := taskContext(ctx, os.Getenv(TaskDirectoryEnvironment))
 	defer stop()
-	code, err := runAsScheduledTask(ctx, user, domain, password, cwd, command)
+	code, err := runProfileFree(ctx, user, domain, password, cwd, command)
 	if err != nil {
 		return err
 	}
@@ -261,12 +256,11 @@ func createWriteRestrictedToken(base syswindows.Token, capabilitySID *syswindows
 	return restricted, nil
 }
 
-func runAsScheduledTask(ctx context.Context, user, domain, password, cwd string, command []string) (int, error) {
+func runProfileFree(ctx context.Context, user, domain, password, cwd string, command []string) (int, error) {
 	directory := os.Getenv(TaskDirectoryEnvironment)
 	if directory == "" {
 		return 0, errors.New("Windows task transport directory is missing")
 	}
-	transport := TaskTransport{Directory: directory}
 	config := taskConfig{Cwd: cwd, Command: command}
 	var err error
 	config.Env, err = requestEnvironment()
@@ -296,77 +290,66 @@ func runAsScheduledTask(ctx context.Context, user, domain, password, cwd string,
 	if err != nil {
 		return 0, err
 	}
-	action := taskAction{Command: helper, Arguments: syswindows.ComposeCommandLine([]string{
-		"__sandbox-local-helper", "__windows-task-broker", directory,
-	})}
-	raw, err = xml.Marshal(taskDefinition{Version: "1.2", Namespace: "http://schemas.microsoft.com/windows/2004/02/mit/task",
-		Settings: taskSettings{ExecutionTimeLimit: "PT0S", AllowHardTerminate: true}, Actions: taskActions{Exec: action}})
-	if err != nil {
-		return 0, err
-	}
-	xmlPath := filepath.Join(directory, "task.xml")
-	if err := os.WriteFile(xmlPath, taskXMLBytes(raw), 0600); err != nil {
-		return 0, err
-	}
-	runAs := user
-	if domain != "" && domain != "." {
-		runAs = domain + `\` + user
-	} else if computer := os.Getenv("COMPUTERNAME"); computer != "" {
-		runAs = computer + `\` + user
-	}
-	if out, err := exec.CommandContext(ctx, "schtasks.exe", "/Create", "/TN", transport.name(), "/XML", xmlPath, "/RU", runAs, "/RP", password, "/F").CombinedOutput(); err != nil {
-		return 0, fmt.Errorf("create scheduled task: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	if out, err := exec.CommandContext(ctx, "schtasks.exe", "/Run", "/TN", transport.name()).CombinedOutput(); err != nil {
-		return 0, fmt.Errorf("start scheduled task: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	code, waitErr := waitForTaskExit(ctx, filepath.Join(directory, "exit.txt"), transport.name())
-	outputErr := replayFile(filepath.Join(directory, "stdout.bin"), os.Stdout)
-	errorOutputErr := replayFile(filepath.Join(directory, "stderr.bin"), os.Stderr)
-	return code, errors.Join(waitErr, outputErr, errorOutputErr)
+	stdout := taskOutputCursor{path: filepath.Join(directory, "stdout.bin"), out: os.Stdout}
+	stderr := taskOutputCursor{path: filepath.Join(directory, "stderr.bin"), out: os.Stderr}
+	var code int
+	waitErr := withProfileFreeBroker(user, domain, password, helper, directory, func(broker syswindows.ProcessInformation) (resultErr error) {
+		defer syswindows.CloseHandle(broker.Process)
+		defer syswindows.CloseHandle(broker.Thread)
+		job, err := restrictedJob()
+		if err != nil {
+			return errors.Join(err, syswindows.TerminateProcess(broker.Process, 1))
+		}
+		defer syswindows.CloseHandle(job)
+		if err := syswindows.AssignProcessToJobObject(job, broker.Process); err != nil {
+			return errors.Join(err, syswindows.TerminateProcess(broker.Process, 1))
+		}
+		// Reap every process before closing its private desktop or reversing
+		// host policy. Closing a job alone initiates asynchronous termination.
+		defer func() { resultErr = errors.Join(resultErr, terminateAndReapJob(job)) }()
+		if _, err := syswindows.ResumeThread(broker.Thread); err != nil {
+			return err
+		}
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			state, err := syswindows.WaitForSingleObject(broker.Process, 100)
+			if err != nil {
+				return err
+			}
+			stdout.drain(1 << 20)
+			stderr.drain(1 << 20)
+			if state == syswindows.WAIT_OBJECT_0 {
+				var brokerExit uint32
+				if err := syswindows.GetExitCodeProcess(broker.Process, &brokerExit); err != nil {
+					return err
+				}
+				code, err = readBrokerExit(directory, brokerExit)
+				return err
+			}
+		}
+	})
+	stdout.drain(0)
+	stderr.drain(0)
+	return code, errors.Join(waitErr, stdout.err, stderr.err)
 }
 
-func waitForTaskExit(ctx context.Context, exitPath string, taskName string) (int, error) {
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-	statusAt := time.Now().Add(time.Second)
-	for {
-		if raw, err := os.ReadFile(exitPath); err == nil {
-			code, ready, parseErr := parseTaskExit(raw)
-			if parseErr != nil {
-				return 0, parseErr
-			}
-			if ready {
-				if failure, err := os.ReadFile(filepath.Join(filepath.Dir(exitPath), "failure.txt")); err == nil {
-					return 0, fmt.Errorf("scheduled-task bootstrap failed: %s", strings.TrimSpace(string(failure)))
-				} else if !errors.Is(err, os.ErrNotExist) {
-					return 0, fmt.Errorf("read scheduled-task failure: %w", err)
-				}
-				return code, nil
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return 0, fmt.Errorf("read scheduled-task completion: %w", err)
-		}
-		if time.Now().After(statusAt) {
-			statusAt = time.Now().Add(time.Second)
-			completed, result, err := scheduledTaskCompleted(ctx, taskName)
-			if err != nil {
-				return 0, err
-			}
-			if completed {
-				// A completed task has already closed its report. Check again to
-				// avoid racing the write between the first read and the query.
-				if raw, err := os.ReadFile(exitPath); errors.Is(err, os.ErrNotExist) || (err == nil && strings.TrimSpace(string(raw)) == "") {
-					return 0, fmt.Errorf("scheduled task ended without a completion report (result %#x)", result)
-				}
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		case <-ticker.C:
-		}
+func readBrokerExit(directory string, brokerExit uint32) (int, error) {
+	if failure, err := os.ReadFile(filepath.Join(directory, "failure.txt")); err == nil {
+		return 0, fmt.Errorf("Windows broker bootstrap failed: %s", strings.TrimSpace(string(failure)))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return 0, err
 	}
+	raw, err := os.ReadFile(filepath.Join(directory, "exit.txt"))
+	if err != nil {
+		return 0, fmt.Errorf("Windows broker exited with status %#x without a completion report: %w", brokerExit, err)
+	}
+	code, ready, err := parseTaskExit(raw)
+	if err == nil && !ready {
+		return 0, fmt.Errorf("Windows broker exited with status %#x and an empty completion report", brokerExit)
+	}
+	return code, err
 }
 
 func parseTaskExit(raw []byte) (int, bool, error) {
@@ -376,32 +359,9 @@ func parseTaskExit(raw []byte) (int, bool, error) {
 	}
 	code, err := strconv.Atoi(value)
 	if err != nil {
-		return 0, false, fmt.Errorf("parse scheduled task exit code: %w", err)
+		return 0, false, fmt.Errorf("parse Windows broker exit code: %w", err)
 	}
 	return code, true, nil
-}
-
-func deleteTask(ctx context.Context, taskName string) error {
-	cmd := exec.CommandContext(ctx, "schtasks.exe", "/Delete", "/TN", taskName, "/F")
-	if out, err := cmd.CombinedOutput(); err != nil && !strings.Contains(string(out), "cannot find") {
-		return fmt.Errorf("delete scheduled task: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func replayFile(path string, out *os.File) error {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if len(data) == 0 {
-		return nil
-	}
-	_, err = out.Write(data)
-	return err
 }
 
 func randomID() (string, error) {
@@ -425,14 +385,4 @@ func requestEnvironment() (map[string]string, error) {
 		delete(env, key)
 	}
 	return env, nil
-}
-
-func taskXMLBytes(raw []byte) []byte {
-	units := utf16.Encode([]rune(`<?xml version="1.0" encoding="UTF-16"?>` + string(raw)))
-	encoded := make([]byte, 2+2*len(units))
-	encoded[0], encoded[1] = 0xff, 0xfe
-	for i, unit := range units {
-		binary.LittleEndian.PutUint16(encoded[2+i*2:], unit)
-	}
-	return encoded
 }

@@ -185,13 +185,15 @@ child output. Inherited stdio works. See [Windows runtime compatibility](docs/wi
 for the upstream fix and a reproduction. The SDK does not change
 ancestor ACLs or silently run unrestricted.
 
-When elevated, `setup windows` provisions the disabled `sandboxlocal` runner
-account. Each `Run` resets and temporarily enables that account, creates a fresh
-capability SID, and launches the actual command with a `WRITE_RESTRICTED` token
-whose restricting-SID set contains that capability plus the runner account,
-current logon SID, and Everyone needed by ordinary Windows runtime objects.
-The built-in Users group remains excluded. Cleanup restores ACLs, removes
-the scheduled task and firewall rule, and disables the account again.
+When elevated, `setup windows` provisions the disabled `sandboxlocal` account
+for preflight. Each `Run` uses its own temporary local account, private desktop,
+and fresh capability SID. The broker starts without loading a Windows user
+profile; the actual command runs with a `WRITE_RESTRICTED` token. Its restricting
+SIDs include the capability, temporary account, current logon SID, and Everyone
+needed by ordinary Windows runtime objects. The built-in Users group remains
+excluded. Concurrent commands keep separate identities and firewall rules.
+Cleanup removes the invocation's ACL entries, firewall rule, and temporary
+account after the process tree stops.
 
 ## Security Scenarios
 
@@ -209,7 +211,7 @@ It contains macOS, Linux, and Windows sections for:
 - allowlist allow/deny domains
 - `curl --noproxy '*'` direct bypass blocking
 - Linux AF_UNIX/socket bypass regression
-- Windows runner account, scheduled task, firewall rule, and ACL cleanup
+- Windows invocation account/profile, broker process tree, firewall rule, and ACL cleanup
 
 ## Testing
 
