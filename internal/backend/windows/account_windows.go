@@ -39,6 +39,62 @@ func createLocalUser(ctx context.Context, username, password string) error {
 	return nil
 }
 
+type localUserInfo struct {
+	name, password         *uint16
+	passwordAge, privilege uint32
+	homeDir, comment       *uint16
+	flags                  uint32
+	scriptPath             *uint16
+}
+
+var netUserAdd = syswindows.NewLazySystemDLL("netapi32.dll").NewProc("NetUserAdd")
+
+func createInvocationLocalUser(username, password string) error {
+	name, err := syswindows.UTF16PtrFromString(username)
+	if err != nil {
+		return err
+	}
+	secret, err := syswindows.UTF16FromString(password)
+	if err != nil {
+		return err
+	}
+	// The API accepts strong passwords without the legacy net.exe confirmation
+	// prompt and does not expose the password through a command line.
+	const userPrivilege, normalAccount, passwordDoesNotExpire = 1, 0x200, 0x10000
+	defer clear(secret)
+	info := localUserInfo{name: name, password: &secret[0], privilege: userPrivilege, flags: normalAccount | passwordDoesNotExpire}
+	var parameter uint32
+	status, _, _ := netUserAdd.Call(0, 1, uintptr(unsafe.Pointer(&info)), uintptr(unsafe.Pointer(&parameter)))
+	runtime.KeepAlive(info)
+	if status != 0 {
+		return fmt.Errorf("create invocation Windows user (parameter %d): %w", parameter, syscall.Errno(status))
+	}
+	return nil
+}
+
+var deleteUserProfile = syswindows.NewLazySystemDLL("userenv.dll").NewProc("DeleteProfileW")
+
+func deleteInvocationProfile(sid string) error {
+	value, err := syswindows.UTF16PtrFromString(sid)
+	if err != nil {
+		return err
+	}
+	ok, _, callErr := deleteUserProfile.Call(uintptr(unsafe.Pointer(value)), 0, 0)
+	runtime.KeepAlive(value)
+	if ok != 0 || callErr == syswindows.ERROR_FILE_NOT_FOUND || callErr == syswindows.ERROR_PATH_NOT_FOUND {
+		return nil
+	}
+	return fmt.Errorf("remove invocation Windows user profile: %w", callErr)
+}
+
+func deleteInvocationLocalUser(ctx context.Context, username string) error {
+	cmd := exec.CommandContext(ctx, "net", "user", username, "/delete")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("delete invocation Windows user: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func localUserExists(ctx context.Context, username string) bool {
 	return exec.CommandContext(ctx, "net", "user", username).Run() == nil
 }
@@ -110,6 +166,15 @@ func newLocalCredential() (string, string, error) {
 		return "", "", err
 	}
 	return sandboxUsername, "Sbx!" + hex.EncodeToString(randomBytes[:4]) + "9", nil
+}
+
+func newInvocationLocalCredential() (string, string, error) {
+	var randomBytes [24]byte
+	if _, err := rand.Read(randomBytes[:]); err != nil {
+		return "", "", err
+	}
+	// SAM local account names are limited to 20 characters.
+	return "sbx-" + hex.EncodeToString(randomBytes[:8]), "Sbx!" + hex.EncodeToString(randomBytes[8:]) + "9", nil
 }
 
 func newCapabilitySID() (*syswindows.SID, error) {

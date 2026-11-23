@@ -5,7 +5,6 @@ package winrunner
 import (
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"os"
@@ -21,23 +20,7 @@ type taskConfig struct {
 	Env     map[string]string
 }
 
-type taskDefinition struct {
-	XMLName   xml.Name `xml:"Task"`
-	Version   string   `xml:"version,attr"`
-	Namespace string   `xml:"xmlns,attr"`
-	Settings  taskSettings
-	Actions   taskActions
-}
-type taskSettings struct {
-	ExecutionTimeLimit         string
-	AllowHardTerminate         bool
-	DisallowStartIfOnBatteries bool
-	StopIfGoingOnBatteries     bool
-}
-type taskActions struct{ Exec taskAction }
-type taskAction struct{ Command, Arguments string }
-
-// RunTaskBroker executes inside the scheduled task, before token restriction.
+// RunTaskBroker runs under the temporary account before token restriction.
 // Only this trusted process can open the IPC files for writing; the command
 // inherits stdio handles without receiving write access to the control files.
 func RunTaskBroker(ctx context.Context, args []string) error {

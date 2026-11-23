@@ -5,11 +5,8 @@ package winrunner
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -18,7 +15,7 @@ import (
 const TaskDirectoryEnvironment = "SANDBOX_LOCAL_WINDOWS_TASK_DIRECTORY"
 
 // TaskTransport is owned by the host backend, so cancellation of its helper
-// cannot skip scheduler and IPC cleanup.
+// cannot skip IPC cleanup.
 type TaskTransport struct{ Directory string }
 
 func NewTaskTransport(user, domain, capability string) (*TaskTransport, error) {
@@ -33,48 +30,11 @@ func NewTaskTransport(user, domain, capability string) (*TaskTransport, error) {
 	return &TaskTransport{Directory: directory}, nil
 }
 
-func (t *TaskTransport) name() string { return `\sandbox-local-` + filepath.Base(t.Directory) }
-
 func (t *TaskTransport) Cleanup(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	var errs []error
-	taskFile := filepath.Join(os.Getenv("SystemRoot"), "System32", "Tasks", strings.TrimPrefix(t.name(), `\`))
-	if _, err := os.Stat(taskFile); err == nil {
-		// A completion report commits normal foreground exit. Task Scheduler may
-		// still be retiring its action; stopping it here would kill background work.
-		completedReport := false
-		if raw, err := os.ReadFile(filepath.Join(t.Directory, "exit.txt")); err == nil {
-			_, ready, parseErr := parseTaskExit(raw)
-			completedReport = ready && parseErr == nil
-			if parseErr != nil {
-				errs = append(errs, parseErr)
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, err)
-		}
-		_, cancelErr := os.Stat(filepath.Join(t.Directory, "cancel"))
-		if !completedReport || cancelErr == nil {
-			completed, _, err := scheduledTaskCompleted(ctx, t.name())
-			if err != nil {
-				errs = append(errs, err)
-			} else if !completed {
-				if out, err := exec.CommandContext(ctx, "schtasks.exe", "/End", "/TN", t.name()).CombinedOutput(); err != nil {
-					errs = append(errs, fmt.Errorf("end scheduled task: %w: %s", err, strings.TrimSpace(string(out))))
-				}
-			}
-		}
-		if err := deleteTask(ctx, t.name()); err != nil {
-			errs = append(errs, err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		errs = append(errs, err)
-	}
-	errs = append(errs, removeTaskDirectory(ctx, t.Directory))
-	return errors.Join(errs...)
+	return removeTaskDirectory(ctx, t.Directory)
 }
 
-// Cancel asks the controller helper to stop its scheduler operations before
+// Cancel asks the controller helper to stop the broker and its owned processes before
 // host cleanup. The protected directory prevents command-originated signals.
 func (t *TaskTransport) Cancel() error {
 	return os.WriteFile(filepath.Join(t.Directory, "cancel"), nil, 0600)
@@ -101,7 +61,7 @@ func taskContext(parent context.Context, directory string) (context.Context, con
 }
 
 // Task termination is asynchronous. Completion/stdin handles can briefly deny
-// deletion even after the scheduler has accepted End/Delete. Retry only these
+// deletion even after the controller ends the job. Retry only these
 // transient filesystem failures; never hide a persistent cleanup failure.
 func removeTaskDirectory(ctx context.Context, directory string) error {
 	deadline := time.Now().Add(2 * time.Second)

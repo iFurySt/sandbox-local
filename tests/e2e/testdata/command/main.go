@@ -32,6 +32,19 @@ func main() {
 			go func(f *os.File, b byte) { defer wg.Done(); _, _ = f.Write(bytes.Repeat([]byte{b}, count)) }(s.file, s.value)
 		}
 		wg.Wait()
+	case "broker-environment":
+		for _, name := range []string{"SANDBOX_LOCAL_WINDOWS_USER", "SANDBOX_LOCAL_WINDOWS_PASSWORD", "SANDBOX_LOCAL_WINDOWS_DOMAIN", "SANDBOX_LOCAL_WINDOWS_REQUEST_ENV", "SANDBOX_LOCAL_HOST_PRIVATE_PROBE"} {
+			if os.Getenv(name) != "" {
+				panic("private host environment reached the command: " + name)
+			}
+		}
+		if os.Getenv("SANDBOX_LOCAL_REQUEST_PROBE") != "explicit-request" {
+			panic("request environment missing")
+		}
+		if os.Getenv("SystemRoot") == "" {
+			panic("system environment missing")
+		}
+		fmt.Fprint(os.Stdout, "environment-isolated")
 	case "exit":
 		n, _ := strconv.Atoi(os.Args[2])
 		os.Exit(n)
@@ -59,6 +72,37 @@ func main() {
 		fmt.Fprint(os.Stdout, "started")
 		n, _ := strconv.Atoi(os.Args[2])
 		time.Sleep(time.Duration(n) * time.Millisecond)
+	case "gated-policy":
+		ready, release, allowed, denied := os.Args[2], os.Args[3], os.Args[4], os.Args[5]
+		check := func() {
+			if err := os.WriteFile(allowed, []byte("allowed"), 0600); err != nil {
+				panic(err)
+			}
+			if _, err := os.ReadFile(denied); err == nil {
+				panic("read deny lost")
+			}
+			if err := os.WriteFile(denied, []byte("bad"), 0600); err == nil {
+				panic("write deny lost")
+			}
+		}
+		check()
+		fmt.Fprint(os.Stdout, "before-release")
+		fmt.Fprint(os.Stderr, "before-release-error")
+		if err := os.WriteFile(ready, []byte("ready"), 0600); err != nil {
+			panic(err)
+		}
+		deadline := time.Now().Add(60 * time.Second)
+		for {
+			if _, err := os.Stat(release); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				panic("gate not released")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		check()
+		fmt.Fprint(os.Stdout, "after-release")
 	case "write":
 		if err := os.WriteFile(os.Args[2], []byte("probe"), 0600); err != nil {
 			fmt.Fprintln(os.Stderr, err)

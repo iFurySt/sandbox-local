@@ -5,9 +5,11 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -167,6 +169,22 @@ func windowsTaskResources(t *testing.T) map[string]bool {
 		}
 		for _, path := range paths {
 			result[path] = true
+		}
+	}
+	if windows.GetCurrentProcessToken().IsElevated() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		script := `$ErrorActionPreference = 'Stop'; $items = @(Get-LocalUser | Where-Object Name -Like 'sbx-*' | ForEach-Object { 'account:' + $_.SID.Value }); $items += @(Get-CimInstance Win32_UserProfile | Where-Object LocalPath -Match '[\\/]sbx-' | ForEach-Object { 'profile:' + $_.SID }); $items += @(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -Like 'sandbox-local-sbx-*' | ForEach-Object { 'firewall:' + $_.Name }); ConvertTo-Json -Compress -InputObject @($items)`
+		out, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+		if err != nil {
+			t.Fatalf("inventory invocation resources: %v %s", err, out)
+		}
+		var names []string
+		if err := json.Unmarshal(bytes.TrimSpace(out), &names); err != nil {
+			t.Fatalf("parse invocation inventory: %v %s", err, out)
+		}
+		for _, name := range names {
+			result[name] = true
 		}
 	}
 	return result

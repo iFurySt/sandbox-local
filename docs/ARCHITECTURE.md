@@ -59,24 +59,22 @@ internal/engine          # 策略合并、后端选择、运行编排、cleanup
 - macOS：`Policy.Seatbelt.DefaultAction` 支持显式选择 `allow` 基线，省略或 `deny` 保持现有默认拒绝行为；两种基线均保留文件与网络规则。固定调用 `/usr/bin/sandbox-exec -p`，将完整动态生成的 Seatbelt profile 作为单个参数传递，不创建临时策略文件。策略仍受 macOS 进程参数大小上限约束；超出上限的任意大策略不受支持，启动会返回系统错误。
 - Linux：使用 bubblewrap / namespaces 表达 filesystem 与 network 隔离；`allowlist` 通过 sandbox 内 loopback bridge、host-managed proxy 和 seccomp exec wrapper 阻断直接 socket 绕过。
 - Windows 普通用户：自动选择 `windows-appcontainer`，每次调用创建并回收当前用户的 AppContainer profile。package SID 的局部 grant 与普通 restricting SID 的 deny 共同约束文件访问；跨进程文件锁串行化 ACL 更新，清理只移除当前身份的 ACE。helper 使用独立 desktop、管道 stdio 和 Job Object 启动进程树；offline 不授予网络 capability，open 保留 loopback 隔离，allowlist 显式拒绝。PowerShell 需要交互式用户会话。
-- Windows 提权进程：`sandbox-local setup windows` 准备默认禁用的 `sandboxlocal` runner，并预检本地账户、batch logon、Task Scheduler、Firewall 和 OpenSSH 能力。每次 `Run` 重置密码并临时启用账户，同时生成随机 capability SID；文件读写由普通 token 与 `WRITE_RESTRICTED` token 的双重访问检查表达。restricting-SID 集合包含本次 capability、runner account、logon SID 和 Everyone；Everyone 用于满足普通 Windows runtime objects，内置 Users 组仍明确排除，避免宿主组 ACL 绕过。命令仍通过一次性 Windows Scheduled Task 启动，以规避 UTM/SSH service 场景下直接 `CreateProcessWithTokenW` 的 `0xC0000142`。`offline` 与 `allowlist` 通过 runner 对应的 per-user Firewall 规则阻断直连，allowlist 流量走 host-managed HTTP/HTTPS proxy；运行结束恢复 ACL、删除 task/firewall rule 并禁用账户。
+- Windows 提权进程：`sandbox-local setup windows` 保留既有预检入口。每次 `Run` 使用独立的临时本地账户、随机 capability SID、私有 window station 和 desktop。broker 不加载用户配置文件；真实命令使用 `WRITE_RESTRICTED` token，保留 capability、临时账户、logon SID 和 Everyone 作为 restricting SID，仍排除内置 Users 组。`offline` 和 `allowlist` 使用本次账户对应的出站防火墙规则，allowlist 流量仍走 host-managed HTTP/HTTPS proxy。
 
 任何平台无法强制执行的策略，都必须通过 capability report 或运行错误显式暴露，不能静默当作成功。
 
 Windows 管理员后端对允许路径的父目录仅临时授予不继承的属性读取、遍历与同步句柄权限，供 Node 等运行时解析真实路径；不允许列目录或读写旁支文件。父目录 DACL 通过单对象原生 API 更新与恢复，保留继承标志，不递归处理父目录树。系统拥有且不能修改的父目录沿用已有权限并返回 warning。
 
-Windows 管理员后端使用 `Local\sandbox-local-windows-backend` 命名 mutex 串行化 setup 与 cleanup。
-mutex 由固定在同一 OS 线程的专用 goroutine 获取和释放；调用方可以跨线程执行 cleanup。
-释放和关闭句柄完成后才返回，重复关闭不会重复释放 mutex；排队获取 mutex 时响应 context 取消。
+Windows 管理员后端使用 `Local\sandbox-local-windows-backend` 命名 mutex 协调 ACL 的更新和清理，不覆盖普通命令的执行阶段。
+清理只删除本次账户和 capability SID 的条目；若策略覆盖原本为空的 DACL，则沿用完整执行锁，直到恢复原状。
+mutex 由固定在同一 OS 线程的专用 goroutine 获取和释放，排队获取时响应 context 取消。
 
-管理员后端将每次任务的配置、有限 stdin 输入和输出文件放在系统临时目录中的独立受保护目录，
-由宿主 backend 持有清理责任，不继承业务 CWD 的只读 ACL。配置和完成报告对本次 capability SID 禁止修改。
-Scheduled Task 直接启动 Go broker，使用 UTF-16 XML 注册任务，以保留 Unicode 和特殊字符路径；
-broker 在降权前打开 stdio 文件，按原始字节传递输入输出并独立报告启动失败和业务退出码。
-取消后的 IPC 清理对 Windows 短暂的共享冲突、访问拒绝和非空目录错误做有界重试，等待文件句柄关闭；永久失败仍显式返回。
+管理员后端为每次调用创建独立受保护的传输目录。broker 在降权前打开 stdin/stdout/stderr，不改变原始字节，
+并独立报告启动失败和业务退出码。运行期间按字节偏移转发输出；退出后仅转发剩余部分。
+私有 window station 的切换只发生在单次调用的 controller 进程，不修改宿主的共享 desktop。
 
-受限命令及其后代属于 Job Object；前台命令结束或取消时先回收整个进程树，再清理任务并恢复 ACL 和网络规则，避免存活的子进程失去策略约束。
-宿主先通过受保护目录通知 helper 取消，超时后才强制结束 helper，随后停止并删除本次 task、回收目录并恢复策略。
+受限命令及后代由 Job Object 管理；controller 退出时回收 broker 及其进程树，随后清理本次 ACL、网络规则、传输目录和临时账户。
+取消后的 IPC 清理对短暂的共享冲突、访问拒绝和非空目录错误做有界重试；永久失败仍显式返回。
 
 Windows 执行回归位于 `tests/e2e/windows_*_test.go`。跨编译验证可通过
 `SANDBOX_LOCAL_TEST_HELPER` 和 `SANDBOX_LOCAL_TEST_COMMAND` 指定原生 helper 与命令 fixture；
@@ -87,5 +85,11 @@ fixture 源码为 `tests/e2e/testdata/command`。执行测试时保持系统防�
 - 已实现 Go module、SDK facade、Cobra CLI、配置加载和基础单元测试。
 - 已实现 macOS Seatbelt 后端闭环：文件写 allow/deny、文件 read deny、network `offline` / `allowlist` / `open`。`allowlist` 通过 host-managed HTTP/HTTPS proxy 强制执行，Seatbelt 只放行该本地代理端口；文件路径会 canonicalize 现有 symlink 前缀。
 - 已实现 Linux bubblewrap 后端闭环：只读根、writable roots、deny remount/mask、network `offline` / `allowlist` / `open`。`allowlist` 使用 `--unshare-net`、sandbox 内 loopback bridge、host Unix socket proxy 和 seccomp exec wrapper，阻断直接 AF_UNIX/socketpair 绕过；SDK 场景通过 `sandbox.MaybeRunHelper()` 让上层应用二进制承接 internal helper dispatch，并通过 `Options.HelperPath` 或 `SANDBOX_LOCAL_HELPER` 指向该 helper-capable binary。
-- Windows 普通用户后端无需管理员初始化，限制与执行要求见 README；原有提权 local-user 后端闭环继续保留：默认禁用的 `sandboxlocal` runner、每次运行随机 capability SID、capability + runner + logon + Everyone restricting SIDs 的 `WRITE_RESTRICTED` token、ACL write allow/deny、一次性 scheduled task，以及 `offline` / `allowlist` / `open` 网络。Windows 真机已验证 SDK E2E、只读读取、写入 allow/deny、CLI allowlist 允许/拒绝、`--noproxy` 直连绕过阻断和 cleanup；`doctor` 会提示 Windows allowlist 依赖 host proxy 与 per-user firewall，loopback 会保留给 managed proxy。
+- Windows 普通用户后端无需管理员初始化；限制与执行要求见 README。提权 local-user 后端支持单次调用身份、私有桌面、受限 token 和受保护的增量输出。两者继续使用各自的文件与网络策略，不允许失败后静默放宽权限。
 - 仓库当前只保留基础 CI；release、SBOM 和 provenance 流水线已收口为后续明确发布需求后再接入。
+
+### Windows invocation ownership and cleanup
+
+The elevated host serializes ACL mutation, not the command lifetime. It also takes the existing same-user AppContainer ACL lock so the two policy writers cannot overwrite one another. Rollback removes only the invocation account/capability SID's entries. Replacing a null DACL still retains the mutation locks until full restoration.
+
+The single-invocation controller creates a private station/desktop and starts a profile-free broker suspended. The broker receives a system environment block instead of inheriting controller credentials; requested variables arrive through protected IPC. The controller owns the broker's Job Object, waits for zero active processes on termination, then releases desktop objects. Host cleanup removes transport files, per-account firewall rules, ACL entries and the account, returning cleanup failures explicitly.
