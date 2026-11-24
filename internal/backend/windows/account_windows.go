@@ -173,8 +173,20 @@ func newInvocationLocalCredential() (string, string, error) {
 	if _, err := rand.Read(randomBytes[:]); err != nil {
 		return "", "", err
 	}
+	username, password := invocationLocalCredential(randomBytes)
+	return username, password, nil
+}
+
+func invocationLocalCredential(randomBytes [24]byte) (string, string) {
 	// SAM local account names are limited to 20 characters.
-	return "sbx-" + hex.EncodeToString(randomBytes[:8]), "Sbx!" + hex.EncodeToString(randomBytes[8:]) + "9", nil
+	username := "sbx-" + hex.EncodeToString(randomBytes[:8])
+	// NetUserAdd defaults the display name to the account name. Password
+	// complexity rejects its hyphen-delimited tokens, ignoring case. Keep the
+	// prefix independent and split the random password into shorter groups so
+	// even repeated random bytes cannot include the 16-character account token.
+	password := "Qz!" + hex.EncodeToString(randomBytes[8:12]) + "-" + hex.EncodeToString(randomBytes[12:16]) +
+		"-" + hex.EncodeToString(randomBytes[16:20]) + "-" + hex.EncodeToString(randomBytes[20:]) + "9"
+	return username, password
 }
 
 func newCapabilitySID() (*syswindows.SID, error) {

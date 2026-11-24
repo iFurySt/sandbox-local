@@ -18,6 +18,10 @@ The previous shared account and whole-DACL rollback required execution-long excl
 
 The original curl/Schannel HTTPS test still fails with `SEC_E_NO_CREDENTIALS`, matching the pinned baseline on the same host. A temporary Go TLS client passed the unchanged network-policy assertions; curl compatibility remains unproven.
 
+Follow-up: GitHub Windows CI rejected invocation passwords with error 2245. `NetUserAdd` defaults the display name to the account name, so the password's `Sbx!` prefix violates the complexity rule for the `sbx-…` display-name token. Use an independent prefix and shorter random groups that cannot contain account-name tokens, preserving 128 bits of random password entropy. Add deterministic complexity checks and native account creation to the existing invocation CI selector.
+
+The follow-up passed `make ci`, Windows vet/cross-compilation, native backend selectors repeated ten times and execution selectors repeated three times with password complexity enabled. The native probe reproduced the original failure, created the repaired accounts successfully and restored the host's original policy. GitHub-hosted Windows CI remains a separate check.
+
 ## Key files
 
 - `internal/backend/windows/backend.go`
