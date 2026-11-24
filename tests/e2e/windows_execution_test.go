@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/iFurySt/sandbox-local/pkg/sandbox"
+	"golang.org/x/sys/windows"
 )
 
 func windowsCommandFixture(t *testing.T, directory string) string {
@@ -86,5 +87,32 @@ func TestWindowsExecutionTransportMatrix(t *testing.T) {
 				t.Fatalf("stream mismatch stdout=%d/%d stderr=%d/%d", out.Len(), len(tc.stdout), errOut.Len(), len(tc.stderr))
 			}
 		})
+	}
+}
+
+func TestWindowsBrokerEnvironmentIsolation(t *testing.T) {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("profile-free broker requires an elevated host")
+	}
+	t.Setenv("SANDBOX_LOCAL_HOST_PRIVATE_PROBE", "host-only")
+	cwd := t.TempDir()
+	helper, fixture := buildHelper(t, cwd), windowsCommandFixture(t, cwd)
+	manager, err := sandbox.NewManager(sandbox.Options{HelperPath: helper, Enforcement: sandbox.EnforcementRequire})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	var out, errOut bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	result, err := manager.Run(ctx, sandbox.Request{Command: []string{fixture, "broker-environment"}, Cwd: cwd,
+		Policy: sandbox.Policy{Filesystem: sandbox.FilesystemPolicy{ReadAllow: []string{cwd}, WriteDeny: []string{cwd}}, Network: sandbox.NetworkPolicy{Mode: sandbox.NetworkOpen}},
+		Env:    map[string]string{"SANDBOX_LOCAL_REQUEST_PROBE": "explicit-request"}, Stdio: sandbox.Stdio{Stdout: &out, Stderr: &errOut}})
+	if err != nil || result.ExitCode != 0 || out.String() != "environment-isolated" || errOut.Len() != 0 {
+		t.Fatalf("result=%+v err=%v stdout=%q stderr=%q", result, err, out.String(), errOut.String())
 	}
 }

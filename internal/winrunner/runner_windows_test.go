@@ -4,10 +4,8 @@ package winrunner
 
 import (
 	"context"
-	"encoding/csv"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -29,34 +27,6 @@ func TestParseTaskExitReturnsCode(t *testing.T) {
 	code, ready, err := parseTaskExit([]byte("23\r\n"))
 	if err != nil || !ready || code != 23 {
 		t.Fatalf("parseTaskExit() = (%d, %t, %v), want (23, true, nil)", code, ready, err)
-	}
-}
-
-func TestScheduledTaskResultUsesNumericState(t *testing.T) {
-	for _, test := range []struct {
-		code      string
-		completed bool
-	}{
-		{"267009", false}, {"267011", false}, {"267045", false},
-		{"0", true}, {"23", true}, {"-2147024894", true},
-	} {
-		t.Run(test.code, func(t *testing.T) {
-			var output strings.Builder
-			writer := csv.NewWriter(&output)
-			if err := writer.Write([]string{"host", `\sandbox-local-test`, "N/A", "任意本地化状态", "batch", "date", test.code}); err != nil {
-				t.Fatal(err)
-			}
-			writer.Flush()
-			completed, _, err := parseScheduledTaskResult(output.String())
-			if err != nil || completed != test.completed {
-				t.Fatalf("completed=%v, want %v, error=%v", completed, test.completed, err)
-			}
-		})
-	}
-	for _, raw := range []string{"", "one,two", "a,b,c,d,e,f,not-a-number"} {
-		if _, _, err := parseScheduledTaskResult(raw); err == nil {
-			t.Fatalf("accepted invalid scheduler response %q", raw)
-		}
 	}
 }
 

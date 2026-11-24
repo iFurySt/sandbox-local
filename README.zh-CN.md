@@ -164,12 +164,12 @@ SSH 或 service 的 session 0 中可能无法初始化。程序和依赖应位�
 上游补丁与复现见 [Windows runtime compatibility](docs/windows-runtime-compatibility.md)。
 SDK 不修改祖先目录 ACL，也不静默取消隔离。
 
-提权运行时，`setup windows` 会准备默认禁用的 `sandboxlocal` runner 账户。每次
-`Run` 重置密码并临时启用该账户，同时创建随机 capability SID；真实命令使用
-restricting-SID 集合中包含该 capability、runner 账户、本次 logon SID 和 Everyone 的
-`WRITE_RESTRICTED` token，以满足 Windows 常规运行时对象；内置 Users 组仍明确
-排除。cleanup 会恢复 ACL、删除 scheduled task 和防火墙
-规则，并再次禁用 runner 账户。
+提权运行时，`setup windows` 会为预检准备默认禁用的 `sandboxlocal` 账户。每次
+`Run` 使用独立的临时本地账户、私有桌面和随机 capability SID。broker 启动时不加载
+Windows 用户配置文件；真实命令仍使用 `WRITE_RESTRICTED` token，其 restricting SID
+包含本次 capability、临时账户、logon SID 和 Windows 常规运行时对象所需的 Everyone，
+不包含内置 Users 组。并发命令使用各自的身份和防火墙规则。进程树停止后，清理仅移除
+本次调用的 ACL 条目、防火墙规则和临时账户。
 
 ## 安全场景
 
@@ -187,7 +187,7 @@ restricting-SID 集合中包含该 capability、runner 账户、本次 logon SID
 - allowlist 允许/拒绝域名
 - `curl --noproxy '*'` 直连绕过阻断
 - Linux AF_UNIX/socket 绕过回归
-- Windows runner 账户、scheduled task、firewall rule 和 ACL cleanup
+- Windows 每次调用的账户/profile、broker 进程树、firewall rule 和 ACL cleanup
 
 ## 测试
 
